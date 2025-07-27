@@ -1,11 +1,41 @@
 # Test your FastAPI endpoints
 
-GET http://127.0.0.1:8000/
+GET http://127.0.0.1:8001/hour
 Accept: application/json
 
 ###
 
-GET http://127.0.0.1:8000/hello/User
+GET http://127.0.0.1:8001/date
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/date
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/total
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/avg_per_day
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/first_tweet_date
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/time_now
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8001/data_timespan
 Accept: application/json
 
 ###

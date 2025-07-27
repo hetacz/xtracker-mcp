@@ -1,0 +1,5 @@
+.venv
+.idea
+**/xt.egg-info
+*.csv
+uv.lock

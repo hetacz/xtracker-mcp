@@ -3,7 +3,9 @@ import time
 
 import requests
 
-from src.sanitize import process_by_date, process_by_hour, sanitize_csv_to_file, save_tweets_to_csv
+from src.sanitize import count_tweets, get_average_tweets_per_day, get_first_tweet_timestamp, process_by_date, \
+    process_by_hour, \
+    sanitize_csv_to_file, save_tweets_to_csv
 
 
 def _download() -> bytes:
@@ -40,10 +42,30 @@ def _download() -> bytes:
 
 
 def get_tweets_by_hour() -> str:
-    sanitized_bytes = _download()
-    return process_by_hour(sanitized_bytes).decode('utf-8')
+    return process_by_hour(_download()).decode('utf-8')
 
 
 def get_tweets_by_date() -> str:
-    sanitized_bytes = _download()
-    return process_by_date(sanitized_bytes).decode('utf-8')
+    return process_by_date(_download()).decode('utf-8')
+
+
+def get_total_tweets() -> int:
+    return count_tweets(_download())
+
+
+def get_avg_per_day() -> float:
+    return get_average_tweets_per_day(_download())
+
+
+def get_first_tweet_date() -> str:
+    return get_first_tweet_timestamp(_download()).isoformat()
+
+
+def get_time_now() -> float:
+    return time.time()
+
+
+def get_data_timespan() -> float:
+    first_tweet = get_first_tweet_timestamp(_download()).timestamp()
+    now = get_time_now()
+    return now - first_tweet

@@ -67,12 +67,12 @@ def sanitize_csv_to_file(
         return f.read()
 
 
-def process_by_hour(file_bytes: bytes, output_path='by_hour') -> bytes:
+def process_by_hour(file_bytes: bytes, output_path: str = 'by_hour.csv') -> bytes:
     buffer = io.BytesIO(file_bytes)
     df = pd.read_csv(buffer)
     df = df.drop(columns=['text', 'created_at'], errors='ignore')
     df['timestamp'] = df['id'].apply(_snowflake_to_datetime)
-    df['hour'] = df['timestamp'].apply(lambda dt: dt.hour)
+    df['hour'] = df['timestamp'].dt.hour
     hours = list(range(24))
     counts = (
         df.groupby('hour')
@@ -80,15 +80,20 @@ def process_by_hour(file_bytes: bytes, output_path='by_hour') -> bytes:
         .reindex(hours, fill_value=0)
         .reset_index(name='count')
     )
+    # count per average day
+    avg_per_day = get_average_tweets_per_day(file_bytes)
+    counts['count_per_avg_day'] = counts['count'] / avg_per_day if avg_per_day != 0 else 0
+    # normalized fraction of total
+    total_counts = counts['count'].sum()
+    counts['normalized'] = counts['count'] / total_counts if total_counts != 0 else 0
     out = io.BytesIO()
     counts.to_csv(out, index=False)
     csv_bytes = out.getvalue()
-    # Save to file
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
 
 
-def process_by_date(file_bytes: bytes, output_path='by_date') -> bytes:
+def process_by_date(file_bytes: bytes, output_path: str = 'by_date.csv') -> bytes:
     buffer = io.BytesIO(file_bytes)
     df = pd.read_csv(buffer)
     df = df.drop(columns=['text', 'created_at'], errors='ignore')
@@ -108,181 +113,28 @@ def process_by_date(file_bytes: bytes, output_path='by_date') -> bytes:
     return csv_bytes
 
 
-def process_tweets(file_bytes: bytes) -> bytes:
-    """
-    Process a CSV of tweets provided as bytes, remove unwanted columns, decode Snowflake IDs
-    to UTC timestamps, group timestamps into 3-hour brackets, and return the result as CSV bytes.
-    """
+def count_tweets(file_bytes: bytes) -> int:
     buffer = io.BytesIO(file_bytes)
     df = pd.read_csv(buffer)
-    df = df.drop(columns=['text', 'created_at'], errors='ignore')
-    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)
-    # Round down to nearest 3-hour bracket
-    df['bracket'] = df['timestamp'].apply(
-        lambda dt: dt.replace(
-            hour=(dt.hour // 3) * 3, minute=0, second=0, microsecond=0
-        ))
-    counts = (
-        df.groupby('bracket')
-        .size()
-        .reset_index(name='count')
-        .sort_values('bracket')
-    )
-    out = io.BytesIO()
-    counts.to_csv(out, index=False)
-    return out.getvalue()
+    return len(df)
+
+
+def get_first_tweet_timestamp(file_bytes: bytes) -> datetime:
+    buffer = io.BytesIO(file_bytes)
+    df = pd.read_csv(buffer)
+    # Use the first row's id for the earliest tweet
+    first_id = df.loc[0, 'id']
+    return _snowflake_to_datetime(first_id)
+
+
+def get_average_tweets_per_day(file_bytes: bytes) -> float:
+    total = count_tweets(file_bytes)
+    first_ts = get_first_tweet_timestamp(file_bytes)
+    now = datetime.now(timezone.utc)
+    elapsed_days = (now - first_ts).total_seconds() / 86400.0
+    return total / elapsed_days if elapsed_days > 0 else float('nan')
 
 
 def save_tweets_to_csv(csv_bytes: bytes, output_path: str) -> None:
     with open(output_path, 'wb') as f:
         f.write(csv_bytes)
-
-# def parse_tweets_csv(
-#         csv_payload: bytes
-# ) -> List[Dict[str, str]]:
-#     # Prepare text buffer
-#     text = csv_payload.decode('utf-8', errors='replace')
-#     buf = io.StringIO(text)
-#
-#     reader = csv.DictReader(buf, quotechar='"', doublequote=True)
-#     records: List[Dict[str, str]] = []
-#
-#     for row in reader:
-#         # Filter out None keys that can occur with malformed CSV data
-#         filtered_row = {k: v for k, v in row.items() if k is not None}
-#
-#         # Remove text and id from row, keep others like 'created_at'
-#         filtered_row.pop('text', None)
-#         id_val = filtered_row.pop('id', None)
-#         if not id_val:
-#             continue
-#         # Decode Snowflake
-#         try:
-#             sf = int(id_val)
-#             ts_ms = (sf >> 22) + TWITTER_EPOCH_MS
-#             dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-#             filtered_row['timestamp_utc'] = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-#         except (ValueError, TypeError):
-#             filtered_row['timestamp_utc'] = ''
-#         records.append(filtered_row)
-#
-#     return records
-#
-#
-# def save_tweets_to_csv(
-#         records: List[Dict[str, str]],
-#         csv_path: Union[str, Path]
-# ) -> str:
-#     if not records:
-#         raise ValueError("No records to save.")
-#
-#     # Determine CSV header order - ensure no None keys
-#     header = [k for k in records[0].keys() if k is not None]
-#
-#     # Generate CSV content in-memory
-#     buffer = io.StringIO()
-#     writer = csv.DictWriter(buffer, fieldnames=header, quotechar='"', doublequote=True)
-#     writer.writeheader()
-#     for rec in records:
-#         # Filter out None keys before writing
-#         clean_rec = {k: v for k, v in rec.items() if k is not None}
-#         writer.writerow(clean_rec)
-#     csv_content = buffer.getvalue()
-#     buffer.close()
-#
-#     # Ensure directory exists and remove old file
-#     path = Path(csv_path)
-#     path.parent.mkdir(parents=True, exist_ok=True)
-#     if path.exists():
-#         path.unlink()
-#
-#     # Write content to file
-#     with path.open('w', newline='', encoding='utf-8') as f:
-#         f.write(csv_content)
-#
-#     return csv_content
-
-# def parse_tweets_csv(
-#         csv_payload: Union[bytes, str]
-# ) -> pd.DataFrame:
-#
-#     # Decode payload to text
-#     text = csv_payload.decode('utf-8') if isinstance(csv_payload, (bytes, bytearray)) else csv_payload
-#     lines = text.splitlines()
-#     if not lines:
-#         return pd.DataFrame()
-#     # Assume header on first line: id,text,created_at
-#     header = lines[0]
-#     expected_cols = ['id', 'text', 'created_at']
-#     if header.split(',')[:3] != expected_cols:
-#         # Unexpected header
-#         return pd.DataFrame()
-#
-#     records = []
-#     for line in lines[1:]:
-#         # Skip blank lines
-#         if not line.strip():
-#             continue
-#         # Split at first comma and last comma
-#         first_comma = line.find(',')
-#         last_comma = line.rfind(',')
-#         if first_comma == -1 or last_comma == -1 or first_comma == last_comma:
-#             continue
-#         id_val = line[:first_comma]
-#         text_field = line[first_comma + 1:last_comma]
-#         created_at = line[last_comma + 1:]
-#         # Strip surrounding quotes from text field if present
-#         if text_field.startswith('"') and text_field.endswith('"'):
-#             text_field = text_field[1:-1]
-#         # Replace double-double-quotes with single quote
-#         text_field = text_field.replace('""', '"')
-#         records.append({'id': id_val, 'text': text_field, 'created_at': created_at})
-#     if not records:
-#         return pd.DataFrame()
-#     df = pd.DataFrame(records)
-#     # Immediately drop 'text'
-#     df.pop('text')
-#
-#     # Convert id Snowflake to UTC timestamp
-#     def snowflake_to_utc(id_val: str) -> pd.Timestamp:
-#         try:
-#             sf = int(id_val)
-#         except (ValueError, TypeError):
-#             return pd.NaT
-#         ts_ms = (sf >> 22) + TWITTER_EPOCH_MS
-#         return pd.Timestamp(datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc))
-#
-#     df['timestamp_utc'] = df['id'].apply(snowflake_to_utc)
-#     # Drop original id column
-#     df.pop('id')
-#     return df
-#
-#
-# def save_tweets_to_csv_str(
-#         df: pd.DataFrame,
-#         csv_path: Union[str, Path]
-# ) -> str:
-#     if df is None or df.empty:
-#         raise ValueError("DataFrame is empty or None; nothing to save.")
-#     if 'timestamp_utc' not in df.columns:
-#         raise ValueError("Missing 'timestamp_utc' column; ensure parse_tweets_csv was run.")
-#
-#     # Prepare DataFrame copy
-#     out_df = df.copy()
-#     # Format timestamp to ISO
-#     out_df['timestamp_utc'] = out_df['timestamp_utc'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-#
-#     # Ensure output directory exists
-#     path = Path(csv_path)
-#     path.parent.mkdir(parents=True, exist_ok=True)
-#
-#     # Remove existing file if it exists
-#     try:
-#         if path.exists():
-#             path.unlink()
-#     except OSError as e:
-#         raise OSError(f"Could not remove existing file: {e}")
-#
-#     # Write new CSV
-#     out_df.to_csv(path, index=False)
-#     return out_df.to_string(index=False, header=True)
