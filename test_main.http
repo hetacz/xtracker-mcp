@@ -1,41 +1,92 @@
 # Test your FastAPI endpoints
 
-GET http://127.0.0.1:8001/hour
-Accept: application/json
+@baseUrl = http://127.0.0.1:8001
+@contentType = application/json
+
+GET {{baseUrl}}/hour
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/hour' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/date
-Accept: application/json
+GET {{baseUrl}}/date
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/date' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/date
-Accept: application/json
+GET {{baseUrl}}/weekday
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/weekday' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/total
-Accept: application/json
+GET {{baseUrl}}/total
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/total' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/avg_per_day
-Accept: application/json
+GET {{baseUrl}}/avg_per_day
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/avg_per_day' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/first_tweet_date
-Accept: application/json
+GET {{baseUrl}}/first_tweet_date
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/first_tweet_date' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/time_now
-Accept: application/json
+GET {{baseUrl}}/time_now
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/time_now' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###
 
-GET http://127.0.0.1:8001/data_timespan
-Accept: application/json
+GET {{baseUrl}}/data_span
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/data_span' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
 
 ###

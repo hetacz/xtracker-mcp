@@ -1,3 +1,4 @@
+import calendar
 import csv
 import io
 import re
@@ -67,6 +68,34 @@ def sanitize_csv_to_file(
         return f.read()
 
 
+def process_by_weekday(file_bytes: bytes, output_path: str = 'by_weekday.csv') -> bytes:
+    buffer = io.BytesIO(file_bytes)
+    df = pd.read_csv(buffer)
+    df = df.drop(columns=['text', 'created_at'], errors='ignore')
+    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)
+    df['weekday'] = df['timestamp'].dt.weekday
+    weekdays = list(range(7))
+    counts = (
+        df.groupby('weekday')
+        .size()
+        .reindex(weekdays, fill_value=0)
+        .reset_index(name='count')
+    )
+    avg_per_day = get_average_tweets_per_day(file_bytes)
+    counts['count_per_avg_day'] = counts['count'] / avg_per_day if avg_per_day else 0
+    total_counts = counts['count'].sum()
+    counts['normalized'] = counts['count'] / total_counts if total_counts else 0
+    # Map weekday numbers to names
+    counts['day'] = counts['weekday'].map(lambda x: calendar.day_name[x])
+    # Reorder columns: day, count, count_per_avg_day, normalized
+    counts = counts[['day', 'count', 'count_per_avg_day', 'normalized']]
+    out = io.BytesIO()
+    counts.to_csv(out, index=False)
+    csv_bytes = out.getvalue()
+    save_tweets_to_csv(csv_bytes, output_path)
+    return csv_bytes
+
+
 def process_by_hour(file_bytes: bytes, output_path: str = 'by_hour.csv') -> bytes:
     buffer = io.BytesIO(file_bytes)
     df = pd.read_csv(buffer)
@@ -108,7 +137,6 @@ def process_by_date(file_bytes: bytes, output_path: str = 'by_date.csv') -> byte
     out = io.BytesIO()
     counts.to_csv(out, index=False)
     csv_bytes = out.getvalue()
-    # Save to file
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
 

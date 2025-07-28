@@ -1,11 +1,12 @@
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
 
 from src.sanitize import count_tweets, get_average_tweets_per_day, get_first_tweet_timestamp, process_by_date, \
     process_by_hour, \
-    sanitize_csv_to_file, save_tweets_to_csv
+    process_by_weekday, sanitize_csv_to_file, save_tweets_to_csv
 
 
 def _download() -> bytes:
@@ -49,6 +50,10 @@ def get_tweets_by_date() -> str:
     return process_by_date(_download()).decode('utf-8')
 
 
+def get_tweets_by_weekday() -> str:
+    return process_by_weekday(_download()).decode('utf-8')
+
+
 def get_total_tweets() -> int:
     return count_tweets(_download())
 
@@ -61,11 +66,10 @@ def get_first_tweet_date() -> str:
     return get_first_tweet_timestamp(_download()).isoformat()
 
 
-def get_time_now() -> float:
-    return time.time()
+def get_time_now() -> str:
+    return datetime.now().isoformat()
 
 
-def get_data_timespan() -> float:
-    first_tweet = get_first_tweet_timestamp(_download()).timestamp()
-    now = get_time_now()
-    return now - first_tweet
+def get_data_range() -> float:
+    first_tweet = get_first_tweet_timestamp(_download())
+    return (datetime.now(timezone.utc) - first_tweet).total_seconds()
