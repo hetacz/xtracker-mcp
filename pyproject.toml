@@ -5,10 +5,10 @@ description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.116.1",
-    "fastmcp>=2.10.6",
-    "pandas>=2.3.1",
+    "fastmcp>=2.11.3",
+    "pandas>=2.3.2",
     "pandas-stubs==2.3.0.250703",
     "pytz>=2025.2",
-    "requests>=2.32.4",
+    "requests>=2.32.5",
     "uvicorn>=0.35.0",
 ]

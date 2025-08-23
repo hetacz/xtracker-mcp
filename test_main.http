@@ -36,11 +36,33 @@ Accept: {{contentType}}
 
 ###
 
+GET {{baseUrl}}/week
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/week' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
+
+###
+
 GET {{baseUrl}}/total
 Accept: {{contentType}}
 
 > {%
     client.test("Request '/total' executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
+
+###
+
+GET {{baseUrl}}/total2
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/total2' executed successfully", function () {
         client.assert(response.status === 200, "Response status is not 200");
     });
 %}
