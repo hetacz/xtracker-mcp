@@ -6,14 +6,15 @@ from datetime import datetime
 import pytz
 import requests
 
-from src.sanitize import DOWNLOAD_DIR, count_tweet_ids, count_tweets, get_average_tweets_per_day, \
-    get_first_tweet_timestamp, \
-    process_by_date, process_by_hour, process_by_week, process_by_weekday, sanitize_csv_to_file, save_tweets_to_csv
+from src.sanitize import DOWNLOAD_DIR, count_tweets, create_clean_timestamps_csv, \
+    get_average_tweets_per_day, get_first_tweet_timestamp, process_by_date, process_by_hour, process_by_week, \
+    process_by_weekday, sanitize_csv_to_file, save_tweets_to_csv
 
 logger = logging.getLogger(__name__)
 
 RAW_PATH = os.path.join(DOWNLOAD_DIR, 'raw_elonmusk.csv')
 PRE_PATH = os.path.join(DOWNLOAD_DIR, 'pre_elonmusk.csv')
+CLEAN_PATH = os.path.join(DOWNLOAD_DIR, 'clean_elonmusk.csv')
 
 
 def _check_modify_date(path: str, modify_date: float = 300) -> bool:
@@ -31,9 +32,9 @@ def _download() -> bytes:
     Returns the processed CSV content as bytes.
     """
     # Check cache freshness (5 minutes)
-    if _check_modify_date(RAW_PATH) and _check_modify_date(PRE_PATH):
-        logger.info('Using cached file: %s', PRE_PATH)
-        with open(PRE_PATH, 'rb') as f:
+    if all(_check_modify_date(p) for p in (RAW_PATH, PRE_PATH, CLEAN_PATH)):
+        logger.info('Using cached file: %s', CLEAN_PATH)
+        with open(CLEAN_PATH, 'rb') as f:
             return f.read()
     else:
         logger.info('Downloading fresh data from XTracker API')
@@ -46,7 +47,9 @@ def _download() -> bytes:
         resp.raise_for_status()
         logger.info('Download status code: %s', resp.status_code)
         save_tweets_to_csv(resp.content, RAW_PATH)
-        return sanitize_csv_to_file(resp.content, PRE_PATH)
+        pre_bytes = sanitize_csv_to_file(resp.content, PRE_PATH)
+        clean_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH)
+        return clean_bytes
 
 
 def get_tweets_by_hour() -> str:
@@ -67,10 +70,6 @@ def get_tweets_by_week() -> str:
 
 def get_total_tweets() -> int:
     return count_tweets(_download())
-
-
-def get_total_tweets_by_id() -> int:
-    return count_tweet_ids(_download())
 
 
 def get_avg_per_day() -> float:

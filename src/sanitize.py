@@ -1,4 +1,3 @@
-import calendar
 import csv
 import io
 import os
@@ -12,11 +11,12 @@ from pandas import DataFrame
 
 TWITTER_EPOCH_MS = 1288834974657
 ET_TZ = pytz.timezone('America/New_York')
-
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOWNLOAD_DIR = os.path.join(ROOT_DIR, "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+
+# todo if bracket missing add date with 0
 
 def _snowflake_to_datetime(snowflake_id: int) -> datetime:
     """Convert a Twitter Snowflake ID to an ET (America/New_York) timezone-aware datetime."""
@@ -25,13 +25,32 @@ def _snowflake_to_datetime(snowflake_id: int) -> datetime:
     return datetime.fromtimestamp(ts_s, tz=timezone.utc).astimezone(ET_TZ)
 
 
+def _timestamps_et_from_bytes(file_bytes: bytes) -> pd.Series:
+    """Parse bytes -> tz-aware America/New_York timestamps (header is guaranteed)."""
+    df = _read_csv_file(file_bytes)  # must expose a 'timestamp' column
+    ts_utc = pd.to_datetime(df['timestamp'], utc=True, errors='coerce').dropna()
+    return ts_utc.dt.tz_convert(ET_TZ)
+
+
+def _span_days_and_weekday_occurrences(ts: pd.Series) -> tuple[int, pd.Series]:
+    if ts.empty:
+        return 0, pd.Series([0] * 7, index=range(7))
+    start_d = ts.min().floor('D')
+    end_d = pd.Timestamp.now(tz=ET_TZ).floor('D')
+    dr = pd.date_range(start=start_d, end=end_d, freq='D', tz=ET_TZ)
+    days_total = len(dr)
+    weekday_occ = (
+        pd.Series(dr.weekday, name='weekday')
+        .value_counts()
+        .reindex(range(7), fill_value=0)
+        .sort_index()
+    )
+    return days_total, weekday_occ
+
+
 def _read_csv_file(file_bytes: bytes) -> DataFrame:
     buffer = io.BytesIO(file_bytes)
     return pd.read_csv(buffer, dtype={'id': 'string'})
-
-
-def _safe_div(num, den):
-    return (num / den) if (pd.notna(den) and den != 0) else 0
 
 
 # compare length with ids found in raw?
@@ -113,30 +132,26 @@ def sanitize_csv_to_file(
     #     return f.read()
 
 
-# TODO remove first week maybe as not full data OR remove all data behind this cutoff
-def process_by_week(file_bytes: bytes, output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv')) -> bytes:
+def create_clean_timestamps_csv(
+        input_data: Union[bytes, str],
+        output_path: str,
+        encoding: str = 'utf-8'
+) -> bytes:
+    # Normalize input to bytes for pandas
+    file_bytes = input_data if isinstance(input_data, bytes) else input_data.encode(encoding, errors='replace')
     df = _read_csv_file(file_bytes)
-    df = df.drop(columns=['text', 'created_at'], errors='ignore')
-    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)  # already ET
-    ts = df['timestamp']
-    # Friday=4; find last Friday and set time to 12:00
-    days_since_friday = (ts.dt.weekday - 4) % 7
-    last_friday_same_week = ts - pd.to_timedelta(days_since_friday, unit='D')
-    week_start_et = (last_friday_same_week.dt.floor('D') + pd.Timedelta(hours=12))
-    # If tweet is before Fri 12:00, move start back one week
-    week_start_et = week_start_et.where(ts >= week_start_et, week_start_et - pd.Timedelta(days=7))
-    week_start_et = week_start_et.rename('week_start_et')
-    # Count per custom week
-    counts = (
-        df.groupby(week_start_et)
-        .size()
-        .reset_index(name='count')
-        .sort_values('week_start_et')
-    )
-    # Label column: ISO date of the custom week start (no time)
-    counts['week'] = counts['week_start_et'].dt.strftime('%Y-%m-%d')
-    # Final column order
-    out_df = counts[['week', 'count']]
+
+    if 'id' not in df.columns:
+        # Produce an empty CSV with just the header if id column is missing
+        out = io.BytesIO()
+        pd.DataFrame(columns=['timestamp']).to_csv(out, index=False)
+        csv_bytes = out.getvalue()
+        save_tweets_to_csv(csv_bytes, output_path)
+        return csv_bytes
+
+    ts_series = df['id'].apply(_snowflake_to_datetime).apply(lambda d: d.isoformat())
+    out_df = pd.DataFrame({'timestamp': ts_series})
+
     out = io.BytesIO()
     out_df.to_csv(out, index=False)
     csv_bytes = out.getvalue()
@@ -144,95 +159,158 @@ def process_by_week(file_bytes: bytes, output_path: str = os.path.join(DOWNLOAD_
     return csv_bytes
 
 
-def process_by_weekday(file_bytes: bytes, output_path: str = os.path.join(DOWNLOAD_DIR, 'by_weekday.csv')) -> bytes:
-    df = _read_csv_file(file_bytes)
-    df = df.drop(columns=['text', 'created_at'], errors='ignore')
-    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)  # already ET
-    df['weekday'] = df['timestamp'].dt.weekday
-    weekdays = list(range(7))
-    counts = (
-        df.groupby('weekday')
-        .size()
-        .reindex(weekdays, fill_value=0)
-        .reset_index(name='count')
-    )
-    avg_per_day = get_average_tweets_per_day(file_bytes)
-    counts['count_per_avg_day'] = counts['count'].apply(lambda c: _safe_div(c, avg_per_day))
-    total_counts = counts['count'].sum()
-    counts['normalized'] = counts['count'].apply(lambda c: _safe_div(c, total_counts))
-    # Map weekday numbers to names
-    counts['day'] = counts['weekday'].map(lambda x: calendar.day_name[x])
-    # Reorder columns: day, count, count_per_avg_day, normalized
-    counts = counts[['day', 'count', 'count_per_avg_day', 'normalized']]
-    out = io.BytesIO()
-    counts.to_csv(out, index=False)
-    csv_bytes = out.getvalue()
+def process_by_date(
+        file_bytes: bytes,
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_date.csv')) -> bytes:
+    ts = _timestamps_et_from_bytes(file_bytes)
+    if ts.empty:
+        out_df = pd.DataFrame(columns=['date_start_et', 'total_count'])
+    else:
+        date_start = ts.dt.floor('D')  # ET midnight
+        out_df = (
+            date_start.rename('date_start_et')
+            .to_frame()
+            .groupby('date_start_et')
+            .size()
+            .reset_index(name='total_count')
+            .sort_values('date_start_et')
+        )
+        out_df['date_start_et'] = out_df['date_start_et'].map(lambda d: d.isoformat())
+
+    csv_bytes = out_df.to_csv(index=False).encode('utf-8')
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
 
 
-def process_by_hour(file_bytes: bytes, output_path: str = os.path.join(DOWNLOAD_DIR, 'by_hour.csv')) -> bytes:
-    df = _read_csv_file(file_bytes)
-    df = df.drop(columns=['text', 'created_at'], errors='ignore')
-    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)  # already ET
-    df['weekday'] = df['timestamp'].dt.weekday
-    df['hour'] = df['timestamp'].dt.hour
+def process_by_hour(
+        file_bytes: bytes,
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_hour.csv')) -> bytes:
+    ts = _timestamps_et_from_bytes(file_bytes)
     hours = list(range(24))
-    counts = (
-        df.groupby('hour')
-        .size()
-        .reindex(hours, fill_value=0)
-        .reset_index(name='count')
-    )
-    avg_per_day = get_average_tweets_per_day(file_bytes)
-    counts['count_per_avg_day'] = counts['count'].apply(lambda c: _safe_div(c, avg_per_day))
-    total_counts = counts['count'].sum()
-    counts['normalized'] = counts['count'].apply(lambda c: _safe_div(c, total_counts))
-    out = io.BytesIO()
-    counts.to_csv(out, index=False)
-    csv_bytes = out.getvalue()
+
+    if ts.empty:
+        out_df = pd.DataFrame({'hour': hours, 'total_count': [0] * 24})
+    else:
+        out_df = (
+            pd.Series(ts.dt.hour, name='hour')
+            .to_frame()
+            .groupby('hour')
+            .size()
+            .reindex(hours, fill_value=0)
+            .reset_index(name='total_count')
+            .astype({'total_count': 'int64'})
+        )
+
+    # Average tweets per hour across the span (include zero-tweet days)
+    days_total, _ = _span_days_and_weekday_occurrences(ts)
+    denom = days_total if days_total > 0 else 1
+    out_df['avg'] = out_df['total_count'] / denom
+
+    total = int(out_df['total_count'].sum())
+    out_df['normalized'] = (out_df['total_count'] / total) if total > 0 else 0.0
+
+    csv_bytes = out_df.to_csv(index=False).encode('utf-8')
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
 
 
-def process_by_date(file_bytes: bytes, output_path: str = os.path.join(DOWNLOAD_DIR, 'by_date.csv')) -> bytes:
-    df = _read_csv_file(file_bytes)
-    df = df.drop(columns=['text', 'created_at'], errors='ignore')
-    df['timestamp'] = df['id'].apply(_snowflake_to_datetime)  # already ET
-    df['weekday'] = df['timestamp'].dt.weekday
-    df['date'] = df['timestamp'].dt.date.astype(str)
+def process_by_weekday(
+        file_bytes: bytes,
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_weekday.csv')) -> bytes:
+    ts = _timestamps_et_from_bytes(file_bytes)
+    days_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+    # How many occurrences of each weekday in the date span (Mon=0..Sun=6)
+    _, weekday_occ = _span_days_and_weekday_occurrences(ts)
+
+    # Total tweets per weekday
     counts = (
-        df.groupby('date')
+        pd.Series(ts.dt.weekday, name='weekday')
+        .to_frame()
+        .groupby('weekday')
         .size()
-        .reset_index(name='count')
-        .sort_values('date')
+        .reindex(range(7), fill_value=0)
+        .astype(int)
     )
-    out = io.BytesIO()
-    counts.to_csv(out, index=False)
-    csv_bytes = out.getvalue()
+
+    # Average tweets per that weekday across the span (zeros included)
+    denom = weekday_occ.replace(0, pd.NA)
+    avg_per_weekday = (counts / denom).fillna(0.0)
+
+    total = int(counts.sum())
+    norm = (counts / total).fillna(0.0) if total > 0 else counts.astype(float)
+
+    out_df = pd.DataFrame(
+        {
+            'day': days_labels,
+            'total_count': counts.values,
+            'avg': avg_per_weekday.values,
+            'normalized': norm.values,
+        })
+
+    csv_bytes = out_df.to_csv(index=False).encode('utf-8')
+    save_tweets_to_csv(csv_bytes, output_path)
+    return csv_bytes
+
+
+# TODO remove first week maybe as not full data OR remove all data behind this cutoff
+def process_by_week(
+        file_bytes: bytes,
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv')) -> bytes:
+    ts = _timestamps_et_from_bytes(file_bytes)
+    if ts.empty:
+        out_df = pd.DataFrame(columns=['week_start_et', 'total_count'])
+    else:
+        # Friday = 4; anchor at Fri 12:00 ET
+        days_since_friday = (ts.dt.weekday - 4) % 7
+        last_friday = ts - pd.to_timedelta(days_since_friday, unit='D')
+        week_start = last_friday.dt.floor('D') + pd.Timedelta(hours=12)
+        week_start = week_start.where(ts >= week_start, week_start - pd.Timedelta(days=7))
+
+        out_df = (
+            week_start.rename('week_start_et')
+            .to_frame()
+            .groupby('week_start_et')
+            .size()
+            .reset_index(name='total_count')
+            .sort_values('week_start_et')
+        )
+        out_df['week_start_et'] = out_df['week_start_et'].map(lambda d: d.isoformat())
+
+    csv_bytes = out_df.to_csv(index=False).encode('utf-8')
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
 
 
 def count_tweets(file_bytes: bytes) -> int:
-    return len(_read_csv_file(file_bytes))
+    # return len(_read_csv_file(file_bytes))
+    return int(_timestamps_et_from_bytes(file_bytes).shape[0])
 
 
+# todo if we normalize the data to a specific cutoff modify this to return the first tweet after that cutoff
 def get_first_tweet_timestamp(file_bytes: bytes) -> datetime:
-    df = _read_csv_file(file_bytes)
-    return df['id'].apply(_snowflake_to_datetime).min()
+    # df = _read_csv_file(file_bytes)
+    # return df['id'].apply(_snowflake_to_datetime).min()
     # Use the first row's id for the earliest tweet
     # first_id = df.loc[0, 'id']
     # return _snowflake_to_datetime(first_id)
+    ts = _timestamps_et_from_bytes(file_bytes)
+    return ts.min() if not ts.empty else pd.NaT.tz_localize(ET_TZ)
 
 
 def get_average_tweets_per_day(file_bytes: bytes) -> float:
-    total = count_tweets(file_bytes)
-    first_ts = get_first_tweet_timestamp(file_bytes)
-    # Use Eastern Time for current time; duration unaffected by timezone choice
-    now = datetime.now(ET_TZ)
-    elapsed_days = (now - first_ts).total_seconds() / 86400.0
-    return total / elapsed_days
+    # total = count_tweets(file_bytes)
+    # first_ts = get_first_tweet_timestamp(file_bytes)
+    # # Use Eastern Time for current time; duration unaffected by timezone choice
+    # now = datetime.now(ET_TZ)
+    # elapsed_days = (now - first_ts).total_seconds() / 86400.0
+    # return total / elapsed_days
+    ts = _timestamps_et_from_bytes(file_bytes)
+    if ts.empty:
+        return 0.0
+    total = int(ts.shape[0])
+    span_days = max((pd.Timestamp.now(tz=ET_TZ) - ts.min()).total_seconds() / 86400.0, 1e-12)
+    return total / span_days
 
 
 def save_tweets_to_csv(csv_bytes: bytes, output_path: str) -> None:
@@ -241,18 +319,3 @@ def save_tweets_to_csv(csv_bytes: bytes, output_path: str) -> None:
         os.makedirs(dir_name, exist_ok=True)
     with open(output_path, 'wb') as f:
         f.write(csv_bytes)
-
-
-# Todo: may serve as double check if parsed csv has correct length
-def count_tweet_ids(input_data: Union[bytes, str], encoding: str = "utf-8", unique: bool = False) -> int:
-    text = input_data.decode(encoding, errors="replace") if isinstance(input_data, bytes) else input_data
-    text = text.lstrip("\ufeff")  # strip BOM if present
-    pat = re.compile(r"(?m)^(\d{19})(?=,)")
-
-    if unique:
-        seen = set()
-        for m in pat.finditer(text):
-            seen.add(m.group(1))
-        return len(seen)
-    else:
-        return sum(1 for _ in pat.finditer(text))

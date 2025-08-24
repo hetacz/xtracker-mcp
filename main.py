@@ -11,9 +11,10 @@ from src.download import (
     get_first_tweet_date,
     get_time_now,
     get_total_tweets,
-    get_total_tweets_by_id, get_tweets_by_date,
+    get_tweets_by_date,
     get_tweets_by_hour,
-    get_tweets_by_week, get_tweets_by_weekday,
+    get_tweets_by_week,
+    get_tweets_by_weekday,
 )
 
 mcp = FastMCP(
@@ -109,8 +110,6 @@ date = _make_stream_handler(get_tweets_by_date)
 weekday = _make_stream_handler(get_tweets_by_weekday)
 week = _make_stream_handler(get_tweets_by_week)
 total = _make_stream_handler(get_total_tweets)
-# debug
-total2 = _make_stream_handler(get_total_tweets_by_id)
 avg_day = _make_stream_handler(get_avg_per_day)
 iso_first_tweet = _make_stream_handler(get_first_tweet_date)
 now = _make_stream_handler(get_time_now)
@@ -123,7 +122,6 @@ app.add_route("/date", date, methods=["GET"])  # CSV
 app.add_route("/weekday", weekday, methods=["GET"])  # CSV
 app.add_route("/week", week, methods=["GET"])  # CSV
 app.add_route("/total", total, methods=["GET"])  # integer as text
-app.add_route("/total2", total2, methods=["GET"])  # integer as text #DEBUG
 app.add_route("/avg_per_day", avg_day, methods=["GET"])  # float as text
 app.add_route("/first_tweet_date", iso_first_tweet, methods=["GET"])  # ISO string
 app.add_route("/time_now", now, methods=["GET"])  # ISO string

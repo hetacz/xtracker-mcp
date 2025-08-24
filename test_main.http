@@ -58,17 +58,6 @@ Accept: {{contentType}}
 
 ###
 
-GET {{baseUrl}}/total2
-Accept: {{contentType}}
-
-> {%
-    client.test("Request '/total2' executed successfully", function () {
-        client.assert(response.status === 200, "Response status is not 200");
-    });
-%}
-
-###
-
 GET {{baseUrl}}/avg_per_day
 Accept: {{contentType}}
 
