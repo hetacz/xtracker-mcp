@@ -19,10 +19,10 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # todo if bracket missing add date with 0
 
 def _snowflake_to_datetime(snowflake_id: int) -> datetime:
-    """Convert a Twitter Snowflake ID to an ET (America/New_York) timezone-aware datetime."""
+    """Convert a Twitter Snowflake ID to an UTC timezone-aware datetime."""
     ts_ms = (int(snowflake_id) >> 22) + TWITTER_EPOCH_MS
     ts_s = ts_ms / 1000.0
-    return datetime.fromtimestamp(ts_s, tz=timezone.utc).astimezone(ET_TZ)
+    return datetime.fromtimestamp(ts_s, tz=timezone.utc)
 
 
 def _timestamps_et_from_bytes(file_bytes: bytes) -> pd.Series:
@@ -107,56 +107,68 @@ def sanitize_csv_to_file(
     with open(output_path, 'rb') as f:
         return f.read()
 
-    # error_count = 0
-    #
-    # with open(output_path, 'w', newline='', encoding=encoding) as out:
-    #     writer = csv.writer(out)
-    #     writer.writerow(next(csv.reader([header])))
-    #     for rec in records:
-    #         parts = next(csv.reader([rec]))
-    #         if len(parts) >= 3:
-    #             id_f, ts_f = parts[0], parts[-1]
-    #             text_f = ','.join(parts[1:-1])
-    #         else:
-    #             error_count += 1
-    #             continue
-    #         text_f = text_f.replace('\n', ' ').replace('\r', ' ')
-    #         writer.writerow([id_f, text_f, ts_f])
-    #
-    # if error_count > 0:
-    #     logger.warning(f"Skipped {error_count} records due to malformed CSV format.")
-    # else:
-    #     logger.info(f"Sanitized CSV saved to {output_path} with no errors")
-    #
-    # with open(output_path, 'rb') as f:
-    #     return f.read()
-
 
 def create_clean_timestamps_csv(
         input_data: Union[bytes, str],
         output_path: str,
-        encoding: str = 'utf-8'
+        output_path_utc: str,
+        output_path_cc: str,
+        trim_to_months: int = 6,
+        encoding: str = 'utf-8',
 ) -> bytes:
-    # Normalize input to bytes for pandas
+    def _empty_csv_bytes() -> bytes:
+        return pd.DataFrame(columns=['timestamp']).to_csv(index=False).encode(encoding)
+
+    def _to_csv_bytes(series: pd.Series) -> bytes:
+        df_out = pd.DataFrame({'timestamp': series.map(lambda d: d.isoformat(timespec='milliseconds'))})
+        return df_out.to_csv(index=False).encode(encoding)
+
+    def _mask_last_n_months_et(series: pd.Series, months: int = trim_to_months) -> pd.Series:
+        now_et = pd.Timestamp.now(tz=ET_TZ)
+        cutoff = now_et - pd.DateOffset(months=months)
+        return series.map(lambda d: d >= cutoff)
+
+    # Normalize input and read CSV
     file_bytes = input_data if isinstance(input_data, bytes) else input_data.encode(encoding, errors='replace')
     df = _read_csv_file(file_bytes)
 
-    if 'id' not in df.columns:
-        # Produce an empty CSV with just the header if id column is missing
-        out = io.BytesIO()
-        pd.DataFrame(columns=['timestamp']).to_csv(out, index=False)
-        csv_bytes = out.getvalue()
-        save_tweets_to_csv(csv_bytes, output_path)
-        return csv_bytes
+    # Handle missing/empty ids
+    if 'id' not in df.columns or df.empty:
+        empty_csv = _empty_csv_bytes()
+        for path in (output_path, output_path_utc, output_path_cc):
+            save_tweets_to_csv(empty_csv, path)
+        return empty_csv
 
-    ts_series = df['id'].apply(_snowflake_to_datetime).apply(lambda d: d.isoformat())
-    out_df = pd.DataFrame({'timestamp': ts_series})
+    # Coerce ids and drop invalid rows
+    ids = pd.to_numeric(df['id'], errors='coerce').dropna()
+    if ids.empty:
+        empty_csv = _empty_csv_bytes()
+        for path in (output_path, output_path_utc, output_path_cc):
+            save_tweets_to_csv(empty_csv, path)
+        return empty_csv
 
-    out = io.BytesIO()
-    out_df.to_csv(out, index=False)
-    csv_bytes = out.getvalue()
-    save_tweets_to_csv(csv_bytes, output_path)
-    return csv_bytes
+    ids = ids.astype('int64')
+
+    # Use helper _snowflake_to_datetime for UTC and convert to ET
+    utc_series = ids.map(_snowflake_to_datetime)
+    et_series = utc_series.map(lambda d: d.astimezone(ET_TZ))
+
+    # Compute last trim_to_months months mask via helper
+    mask = _mask_last_n_months_et(et_series, months=trim_to_months)
+
+    # Build CSV bytes
+    et_csv_bytes = _to_csv_bytes(et_series)
+    utc_csv_bytes = _to_csv_bytes(utc_series)
+    cc_csv_bytes = _to_csv_bytes(et_series[mask])
+
+    # Save all outputs
+    save_tweets_to_csv(et_csv_bytes, output_path)
+    save_tweets_to_csv(utc_csv_bytes, output_path_utc)
+    save_tweets_to_csv(cc_csv_bytes, output_path_cc)
+    ###
+    process_by_15min(et_csv_bytes)
+    ###
+    return et_csv_bytes
 
 
 def process_by_date(
@@ -164,15 +176,22 @@ def process_by_date(
         output_path: str = os.path.join(DOWNLOAD_DIR, 'by_date.csv')) -> bytes:
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
-        out_df = pd.DataFrame(columns=['date_start_et', 'total_count'])
+        today = pd.Timestamp.now(tz=ET_TZ).floor('D')
+        out_df = pd.DataFrame({'date_start_et': [today.isoformat()], 'total_count': [0]})
     else:
         date_start = ts.dt.floor('D')  # ET midnight
+        end_d = pd.Timestamp.now(tz=ET_TZ).floor('D')
+        start_d = ts.min().floor('D')
+        all_days = pd.date_range(start=start_d, end=end_d, freq='D', tz=ET_TZ)
+
         out_df = (
             date_start.rename('date_start_et')
             .to_frame()
             .groupby('date_start_et')
             .size()
+            .reindex(all_days, fill_value=0)
             .reset_index(name='total_count')
+            .rename(columns={'index': 'date_start_et'})
             .sort_values('date_start_et')
         )
         out_df['date_start_et'] = out_df['date_start_et'].map(lambda d: d.isoformat())
@@ -256,30 +275,156 @@ def process_by_weekday(
 # TODO remove first week maybe as not full data OR remove all data behind this cutoff
 def process_by_week(
         file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv')) -> bytes:
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv'),
+        anchor_weekday: int = 4,
+        include_empty: bool = True
+) -> bytes:
+    def _anchors_noon_weekday_et(ts_et: pd.Series, anchor_weekday: int) -> pd.Series:
+        if not isinstance(anchor_weekday, int) or not (0 <= anchor_weekday <= 6):
+            raise ValueError("anchor_weekday must be an int in 0..6 (0=Mon .. 6=Sun).")
+        days_since_anchor = (ts_et.dt.weekday - anchor_weekday) % 7
+        last_anchor_midnight = (ts_et - pd.to_timedelta(days_since_anchor, unit="D")).dt.normalize()
+        anchor = last_anchor_midnight + pd.Timedelta(hours=12)
+        anchor = anchor.where(ts_et >= anchor, anchor - pd.Timedelta(days=7))
+        return anchor  # tz-aware America/New_York
+
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
         out_df = pd.DataFrame(columns=['week_start_et', 'total_count'])
     else:
-        # Friday = 4; anchor at Fri 12:00 ET
-        days_since_friday = (ts.dt.weekday - 4) % 7
-        last_friday = ts - pd.to_timedelta(days_since_friday, unit='D')
-        week_start = last_friday.dt.floor('D') + pd.Timedelta(hours=12)
-        week_start = week_start.where(ts >= week_start, week_start - pd.Timedelta(days=7))
+        anchors = _anchors_noon_weekday_et(ts, anchor_weekday)
+        grouped = (anchors.to_frame(name="anchor_et")
+                   .groupby("anchor_et", sort=True).size()
+                   .reset_index(name="total_count"))
 
-        out_df = (
-            week_start.rename('week_start_et')
-            .to_frame()
-            .groupby('week_start_et')
-            .size()
-            .reset_index(name='total_count')
-            .sort_values('week_start_et')
-        )
-        out_df['week_start_et'] = out_df['week_start_et'].map(lambda d: d.isoformat())
+        if include_empty:
+            start, end = grouped["anchor_et"].min(), grouped["anchor_et"].max()
+            full_idx = pd.date_range(
+                start=start, end=end,
+                freq=pd.DateOffset(weeks=1),
+                tz="America/New_York")
+            grouped = (
+                grouped.set_index("anchor_et")
+                .reindex(full_idx, fill_value=0)
+                .rename_axis("anchor_et").reset_index()
+            )
 
-    csv_bytes = out_df.to_csv(index=False).encode('utf-8')
+        grouped["week_start_et"] = grouped["anchor_et"].map(lambda x: x.isoformat())
+        out_df = grouped[["week_start_et", "total_count"]].sort_values("week_start_et", kind="stable")
+
+    csv_bytes = out_df.to_csv(index=False).encode("utf-8")
     save_tweets_to_csv(csv_bytes, output_path)
     return csv_bytes
+
+
+def process_by_15min(
+        file_bytes: bytes,
+        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_15min.csv'),
+        output_path_recent: str = os.path.join(DOWNLOAD_DIR, 'by_15min_recent.csv'),
+        output_path_last_wed: str = os.path.join(DOWNLOAD_DIR, 'by_15min_last_wed.csv'),
+        output_path_last_fri: str = os.path.join(DOWNLOAD_DIR, 'by_15min_last_fri.csv'),
+        include_empty: bool = False,
+        months: int = 6,
+) -> bytes:
+    ts = _timestamps_et_from_bytes(file_bytes)
+
+    if ts.empty:
+        out_df = pd.DataFrame(columns=['15m_bucket_start_et', 'total_count'])
+        csv_bytes = out_df.to_csv(index=False).encode('utf-8')
+        save_tweets_to_csv(csv_bytes, output_path)
+        save_tweets_to_csv(csv_bytes, output_path_recent)
+        save_tweets_to_csv(csv_bytes, output_path_last_wed)
+        save_tweets_to_csv(csv_bytes, output_path_last_fri)
+        return csv_bytes
+
+    step_ns = 15 * 60 * 1_000_000_000  # 15 minutes in nanoseconds
+
+    def _floor_15min_et(series: pd.Series) -> pd.Series:
+        # Work in UTC nanoseconds but align to ET wall-clock 15-minute boundaries by adding local offset
+        ns = series.astype('int64')  # UTC epoch ns per timestamp
+        offset_s = series.map(lambda x: int(x.utcoffset().total_seconds()))  # seconds offset from UTC at that instant
+        adjusted_ns = ns + offset_s * 1_000_000_000
+        bucket_local_ns = (adjusted_ns // step_ns) * step_ns
+        bucket_utc_ns = bucket_local_ns - offset_s * 1_000_000_000
+        bucket_utc = pd.to_datetime(bucket_utc_ns, utc=True)
+        # Convert to ET timezone
+        if isinstance(bucket_utc, pd.Series):
+            bucket_et = bucket_utc.dt.tz_convert(ET_TZ)
+        else:
+            bucket_et = bucket_utc.tz_convert(ET_TZ)
+        return bucket_et
+
+    # Align every timestamp to the wall-clock 15-minute floor in ET without DST ambiguity
+    bucket_start = _floor_15min_et(ts)
+
+    grouped = (
+        pd.Series(bucket_start, name='15m_bucket_start_et')
+        .to_frame()
+        .groupby('15m_bucket_start_et', sort=True)
+        .size()
+        .reset_index(name='total_count')
+    )
+
+    if include_empty:
+        # Build a complete 15-minute index from the aligned first bucket up to "now" aligned
+        start_aligned = bucket_start.min()
+        now_et = pd.Timestamp.now(tz=ET_TZ)
+        now_aligned = _floor_15min_et(pd.Series([now_et])).iloc[0]
+        full_idx = pd.date_range(start=start_aligned, end=now_aligned, freq='15min', tz=ET_TZ)
+        grouped = (
+            grouped.set_index('15m_bucket_start_et')
+            .reindex(full_idx, fill_value=0)
+            .rename_axis('15m_bucket_start_et')
+            .reset_index()
+        )
+
+    # Keep a datetime copy for recent window filtering before string conversion
+    grouped_dt = grouped.copy()
+
+    # Full output: stringify to ISO with seconds precision (no microseconds)
+    grouped['15m_bucket_start_et'] = grouped['15m_bucket_start_et'].map(lambda d: d.isoformat(timespec='seconds'))
+    out_df = grouped[['15m_bucket_start_et', 'total_count']].sort_values('15m_bucket_start_et', kind='stable')
+    full_csv_bytes = out_df.to_csv(index=False).encode('utf-8')
+    save_tweets_to_csv(full_csv_bytes, output_path)
+
+    # Recent window (last `months`) with aligned cutoff to the 15-minute grid, computed via the same method
+    now_et = pd.Timestamp.now(tz=ET_TZ)
+    cutoff_raw = now_et - pd.DateOffset(months=max(int(months), 0))
+    cutoff_aligned = _floor_15min_et(pd.Series([cutoff_raw])).iloc[0]
+    recent = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= cutoff_aligned].copy()
+    recent['15m_bucket_start_et'] = recent['15m_bucket_start_et'].map(lambda d: d.isoformat(timespec='seconds'))
+    recent_out = recent[['15m_bucket_start_et', 'total_count']].sort_values('15m_bucket_start_et', kind='stable')
+    recent_csv_bytes = recent_out.to_csv(index=False).encode('utf-8')
+    save_tweets_to_csv(recent_csv_bytes, output_path_recent)
+
+    # Helper to compute last weekday at 12:00 ET (0=Mon .. 6=Sun)
+    def _last_weekday_noon_et(target_weekday: int) -> pd.Timestamp:
+        now = pd.Timestamp.now(tz=ET_TZ)
+        today_noon = now.normalize() + pd.Timedelta(hours=12)
+        days_ago = (today_noon.weekday() - target_weekday) % 7
+        candidate = today_noon - pd.Timedelta(days=days_ago)
+        if candidate > now:
+            candidate -= pd.Timedelta(days=7)
+        return candidate
+
+    # Last Wednesday (2) and last Friday (4) at 12:00 ET
+    cutoff_wed = _last_weekday_noon_et(2)
+    cutoff_fri = _last_weekday_noon_et(4)
+
+    # Filter and save tiny CSVs for each cutoff
+    wed_df = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= cutoff_wed].copy()
+    wed_df['15m_bucket_start_et'] = wed_df['15m_bucket_start_et'].map(lambda d: d.isoformat(timespec='seconds'))
+    wed_out = wed_df[['15m_bucket_start_et', 'total_count']].sort_values('15m_bucket_start_et', kind='stable')
+    wed_csv_bytes = wed_out.to_csv(index=False).encode('utf-8')
+    save_tweets_to_csv(wed_csv_bytes, output_path_last_wed)
+
+    fri_df = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= cutoff_fri].copy()
+    fri_df['15m_bucket_start_et'] = fri_df['15m_bucket_start_et'].map(lambda d: d.isoformat(timespec='seconds'))
+    fri_out = fri_df[['15m_bucket_start_et', 'total_count']].sort_values('15m_bucket_start_et', kind='stable')
+    fri_csv_bytes = fri_out.to_csv(index=False).encode('utf-8')
+    save_tweets_to_csv(fri_csv_bytes, output_path_last_fri)
+
+    return full_csv_bytes
 
 
 def count_tweets(file_bytes: bytes) -> int:

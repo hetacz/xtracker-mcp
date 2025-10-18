@@ -6,15 +6,17 @@ from datetime import datetime
 import pytz
 import requests
 
-from src.sanitize import DOWNLOAD_DIR, count_tweets, create_clean_timestamps_csv, \
-    get_average_tweets_per_day, get_first_tweet_timestamp, process_by_date, process_by_hour, process_by_week, \
-    process_by_weekday, sanitize_csv_to_file, save_tweets_to_csv
+from src.sanitize import DOWNLOAD_DIR, count_tweets, create_clean_timestamps_csv, get_average_tweets_per_day, \
+    get_first_tweet_timestamp, process_by_15min, process_by_date, process_by_hour, process_by_week, process_by_weekday, \
+    sanitize_csv_to_file, save_tweets_to_csv
 
 logger = logging.getLogger(__name__)
 
 RAW_PATH = os.path.join(DOWNLOAD_DIR, 'raw_elonmusk.csv')
 PRE_PATH = os.path.join(DOWNLOAD_DIR, 'pre_elonmusk.csv')
 CLEAN_PATH = os.path.join(DOWNLOAD_DIR, 'clean_elonmusk.csv')
+CC_PATH = os.path.join(DOWNLOAD_DIR, 'cc_elonmusk.csv')
+UTC_PATH = os.path.join(DOWNLOAD_DIR, 'utc_elonmusk.csv')
 
 
 def _check_modify_date(path: str, modify_date: float = 300) -> bool:
@@ -32,7 +34,7 @@ def _download() -> bytes:
     Returns the processed CSV content as bytes.
     """
     # Check cache freshness (5 minutes)
-    if all(_check_modify_date(p) for p in (RAW_PATH, PRE_PATH, CLEAN_PATH)):
+    if all(_check_modify_date(p) for p in (RAW_PATH, PRE_PATH, CLEAN_PATH, UTC_PATH, CC_PATH)):
         logger.info('Using cached file: %s', CLEAN_PATH)
         with open(CLEAN_PATH, 'rb') as f:
             return f.read()
@@ -48,7 +50,7 @@ def _download() -> bytes:
         logger.info('Download status code: %s', resp.status_code)
         save_tweets_to_csv(resp.content, RAW_PATH)
         pre_bytes = sanitize_csv_to_file(resp.content, PRE_PATH)
-        clean_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH)
+        clean_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH, UTC_PATH, CC_PATH)
         return clean_bytes
 
 
@@ -66,6 +68,10 @@ def get_tweets_by_weekday() -> str:
 
 def get_tweets_by_week() -> str:
     return process_by_week(_download()).decode('utf-8')
+
+
+def get_tweets_by_15min() -> str:
+    return process_by_15min(_download()).decode('utf-8')
 
 
 def get_total_tweets() -> int:

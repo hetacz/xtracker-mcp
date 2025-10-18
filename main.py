@@ -6,16 +6,8 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from src.download import (
-    get_avg_per_day,
-    get_data_range,
-    get_first_tweet_date,
-    get_time_now,
-    get_total_tweets,
-    get_tweets_by_date,
-    get_tweets_by_hour,
-    get_tweets_by_week,
-    get_tweets_by_weekday,
-)
+    get_avg_per_day, get_data_range, get_first_tweet_date, get_time_now, get_total_tweets, get_tweets_by_15min,
+    get_tweets_by_date, get_tweets_by_hour, get_tweets_by_week, get_tweets_by_weekday)
 
 mcp = FastMCP(
     name="xtracker-mcp",
@@ -49,6 +41,18 @@ def tweets_by_weekday_grouped() -> str:
 def tweets_by_week_grouped() -> str:
     """Return tweet counts grouped by week (starts on Friday 12:00 ET) as CSV text."""
     return get_tweets_by_week()
+
+
+@mcp.tool()
+def tweets_by_15min_grouped() -> str:
+    """Return tweet counts grouped into 15-minute buckets (ET) aligned to wall-clock quarter-hour boundaries as CSV text."""
+    return get_tweets_by_15min()
+
+
+# @mcp.tool()
+# def tweets_by_15min_recent_grouped(months: int = 6) -> str:
+#     """Return tweet counts grouped into 15-minute buckets (ET), trimmed to last N months (default 6), as CSV text."""
+#     return get_tweets_by_15min_recent(months)
 
 
 @mcp.tool()
@@ -109,6 +113,11 @@ hour = _make_stream_handler(get_tweets_by_hour)
 date = _make_stream_handler(get_tweets_by_date)
 weekday = _make_stream_handler(get_tweets_by_weekday)
 week = _make_stream_handler(get_tweets_by_week)
+fifteen = _make_stream_handler(get_tweets_by_15min)
+# fifteen_with_empty = _make_stream_handler(get_tweets_by_15min_with_empty)
+# fifteen_recent = _make_stream_handler(lambda: get_tweets_by_15min_recent(6))
+
+# Other info endpoints
 total = _make_stream_handler(get_total_tweets)
 avg_day = _make_stream_handler(get_avg_per_day)
 iso_first_tweet = _make_stream_handler(get_first_tweet_date)
@@ -121,6 +130,8 @@ app.add_route("/hour", hour, methods=["GET"])  # CSV
 app.add_route("/date", date, methods=["GET"])  # CSV
 app.add_route("/weekday", weekday, methods=["GET"])  # CSV
 app.add_route("/week", week, methods=["GET"])  # CSV
+app.add_route("/15min", fifteen, methods=["GET"])  # CSV aligned to wall-clock 15-minute buckets
+# app.add_route("/15min_with_empty", fifteen_with_empty, methods=["GET"])  # CSV including empty intervals
 app.add_route("/total", total, methods=["GET"])  # integer as text
 app.add_route("/avg_per_day", avg_day, methods=["GET"])  # float as text
 app.add_route("/first_tweet_date", iso_first_tweet, methods=["GET"])  # ISO string
