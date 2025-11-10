@@ -18,6 +18,8 @@ CLEAN_PATH = os.path.join(DOWNLOAD_DIR, 'clean_elonmusk.csv')
 CC_PATH = os.path.join(DOWNLOAD_DIR, 'cc_elonmusk.csv')
 UTC_PATH = os.path.join(DOWNLOAD_DIR, 'utc_elonmusk.csv')
 
+ENCODING = 'utf-8'
+
 
 def _check_modify_date(path: str, modify_date: float = 300) -> bool:
     return (
@@ -55,23 +57,23 @@ def _download() -> bytes:
 
 
 def get_tweets_by_hour() -> str:
-    return process_by_hour(_download()).decode('utf-8')
+    return process_by_hour(_download()).decode(ENCODING)
 
 
 def get_tweets_by_date() -> str:
-    return process_by_date(_download()).decode('utf-8')
+    return process_by_date(_download()).decode(ENCODING)
 
 
 def get_tweets_by_weekday() -> str:
-    return process_by_weekday(_download()).decode('utf-8')
+    return process_by_weekday(_download()).decode(ENCODING)
 
 
 def get_tweets_by_week() -> str:
-    return process_by_week(_download()).decode('utf-8')
+    return process_by_week(_download()).decode(ENCODING)
 
 
 def get_tweets_by_15min() -> str:
-    return process_by_15min(_download()).decode('utf-8')
+    return process_by_15min(_download()).decode(ENCODING)
 
 
 def get_total_tweets() -> int:

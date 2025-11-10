@@ -3,3 +3,5 @@
 **/xt.egg-info
 *.csv
 uv.lock
+
+tests
