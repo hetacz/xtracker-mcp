@@ -13,8 +13,16 @@ TWITTER_EPOCH_MS = 1288834974657
 ET_TZ = pytz.timezone('America/New_York')
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOWNLOAD_DIR = os.path.join(ROOT_DIR, "downloads")
+DOWNLOAD_DIR_MAIN = os.path.join(DOWNLOAD_DIR, "main")
+DOWNLOAD_DIR_15 = os.path.join(DOWNLOAD_DIR, "15m")
+DOWNLOAD_DIR_15_ET = os.path.join(DOWNLOAD_DIR_15, "et")
+DOWNLOAD_DIR_15_UTC = os.path.join(DOWNLOAD_DIR_15, "utc")
 ENCODING = "utf-8"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR_MAIN, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR_15, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR_15_ET, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR_15_UTC, exist_ok=True)
 
 
 # todo if bracket missing add date with 0
@@ -400,22 +408,47 @@ def process_by_week(
 
 def process_by_15min(
         file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_15min.csv'),
-        output_path_recent: str = os.path.join(DOWNLOAD_DIR, 'by_15min_recent.csv'),
-        output_path_last_tue: str = os.path.join(DOWNLOAD_DIR, 'by_15min_last_tue.csv'),
-        output_path_last_fri: str = os.path.join(DOWNLOAD_DIR, 'by_15min_last_fri.csv'),
+        output_path: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min.csv'),
+        output_path_recent: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_recent.csv'),
+        output_path_last_tue: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_tue.csv'),
+        output_path_last_fri: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_fri.csv'),
+        output_path_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_utc.csv'),
+        output_path_recent_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_recent_utc.csv'),
+        output_path_last_tue_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_tue_utc.csv'),
+        output_path_last_fri_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_fri_utc.csv'),
         include_empty: bool = False,
         months: int = 6,
 ) -> bytes:
-    """Aggregate tweets into 15-minute ET buckets plus recent and weekday-specific slices."""
+    """Aggregate tweets into 15-minute ET buckets plus recent and weekday-specific slices.
+
+    Also writes UTC-variant CSVs for the same buckets, with timestamps converted
+    from ET (America/New_York) to UTC. Bucket boundaries are defined in ET and
+    then converted to UTC, so the start of the ET series (e.g., 12:00 ET) maps
+    to its corresponding UTC instant. UTC timestamps are formatted with a
+    trailing 'Z'.
+    """
     ts = _timestamps_et_from_bytes(file_bytes)
 
+    def _write_time_buckets_utc_z(df: DataFrame, path: str, column: str) -> bytes:
+        """Write UTC 15-minute buckets with timestamps formatted using 'Z'."""
+        view = df[[column, 'total_count']].copy()
+        # Expect timezone-aware UTC timestamps; format explicitly with Z
+        view[column] = view[column].map(lambda d: d.strftime('%Y-%m-%dT%H:%M:%SZ'))
+        return _write_dataframe(view, path)
+
     if ts.empty:
-        out_df = pd.DataFrame(columns=['15m_bucket_start_et', 'total_count'])
-        empty_bytes = _write_dataframe(out_df, output_path)
+        # Prepare empty ET DataFrame and reuse for ET outputs
+        empty_et = pd.DataFrame(columns=['15m_bucket_start_et', 'total_count'])
+        empty_bytes_et = _write_dataframe(empty_et, output_path)
+
+        # Empty UTC schema for the four UTC outputs
+        empty_utc = pd.DataFrame(columns=['15m_bucket_start_utc', 'total_count'])
+        _write_time_buckets_utc_z(empty_utc, output_path_utc, '15m_bucket_start_utc')
         for extra_path in (output_path_recent, output_path_last_tue, output_path_last_fri):
-            save_tweets_to_csv(empty_bytes, extra_path)
-        return empty_bytes
+            save_tweets_to_csv(empty_bytes_et, extra_path)
+        for extra_path in (output_path_recent_utc, output_path_last_tue_utc, output_path_last_fri_utc):
+            _write_time_buckets_utc_z(empty_utc, extra_path, '15m_bucket_start_utc')
+        return empty_bytes_et
 
     bucket_start = _floor_to_minutes(ts, 15)
     grouped = (
@@ -440,9 +473,15 @@ def process_by_15min(
     # Keep a datetime copy for window filtering before string conversion
     grouped_dt = grouped.copy()
 
-    # Full output
+    # Full output (ET)
     grouped_sorted = grouped_dt.sort_values('15m_bucket_start_et', kind='stable')
     full_csv_bytes = _write_time_buckets(grouped_sorted, output_path, '15m_bucket_start_et')
+
+    # Full output (UTC) – convert ET bucket starts to UTC preserving instants
+    grouped_utc = grouped_sorted.copy()
+    grouped_utc['15m_bucket_start_utc'] = grouped_utc['15m_bucket_start_et'].dt.tz_convert('UTC')
+    grouped_utc = grouped_utc[['15m_bucket_start_utc', 'total_count']]
+    _write_time_buckets_utc_z(grouped_utc, output_path_utc, '15m_bucket_start_utc')
 
     # Recent window (last `months`) aligned to 15-min
     now_et = pd.Timestamp.now(tz=ET_TZ)
@@ -451,6 +490,12 @@ def process_by_15min(
     recent = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= cutoff_aligned].copy()
     recent_sorted = recent.sort_values('15m_bucket_start_et', kind='stable')
     recent_csv_bytes = _write_time_buckets(recent_sorted, output_path_recent, '15m_bucket_start_et')
+
+    # Recent window (UTC)
+    recent_utc = recent_sorted.copy()
+    recent_utc['15m_bucket_start_utc'] = recent_utc['15m_bucket_start_et'].dt.tz_convert('UTC')
+    recent_utc = recent_utc[['15m_bucket_start_utc', 'total_count']]
+    _write_time_buckets_utc_z(recent_utc, output_path_recent_utc, '15m_bucket_start_utc')
 
     def _last_weekday_noon_et(target_weekday: int) -> pd.Timestamp:
         """Find the most recent occurrence of target_weekday at noon ET.
@@ -525,11 +570,23 @@ def process_by_15min(
                 'total_count': pd.Series([], dtype='int64')
             })
         _write_time_buckets(empty_tue, output_path_last_tue, '15m_bucket_start_et')
+
+        empty_tue_utc = pd.DataFrame(
+            {
+                '15m_bucket_start_utc': pd.Series([], dtype='datetime64[ns, UTC]'),
+                'total_count': pd.Series([], dtype='int64')
+            })
+        _write_time_buckets_utc_z(empty_tue_utc, output_path_last_tue_utc, '15m_bucket_start_utc')
     else:
         last_tue = grouped_dt.loc[(grouped_dt['15m_bucket_start_et'] >= tue_start) &
                                   (grouped_dt['15m_bucket_start_et'] < tue_end)].copy()
         last_tue_sorted = last_tue.sort_values('15m_bucket_start_et', kind='stable')
         _write_time_buckets(last_tue_sorted, output_path_last_tue, '15m_bucket_start_et')
+
+        last_tue_utc = last_tue_sorted.copy()
+        last_tue_utc['15m_bucket_start_utc'] = last_tue_utc['15m_bucket_start_et'].dt.tz_convert('UTC')
+        last_tue_utc = last_tue_utc[['15m_bucket_start_utc', 'total_count']]
+        _write_time_buckets_utc_z(last_tue_utc, output_path_last_tue_utc, '15m_bucket_start_utc')
 
     # For Friday: since last Friday noon up to now, but empty if past next Friday noon
     if now_et >= fri_end:
@@ -539,10 +596,23 @@ def process_by_15min(
                 'total_count': pd.Series([], dtype='int64')
             })
         _write_time_buckets(empty_fri, output_path_last_fri, '15m_bucket_start_et')
+
+        empty_fri_utc = pd.DataFrame(
+            {
+                '15m_bucket_start_utc': pd.Series([], dtype='datetime64[ns, UTC]'),
+                'total_count': pd.Series([], dtype='int64')
+            })
+        _write_time_buckets_utc_z(empty_fri_utc, output_path_last_fri_utc, '15m_bucket_start_utc')
     else:
         last_fri = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= fri_start].copy()
         last_fri_sorted = last_fri.sort_values('15m_bucket_start_et', kind='stable')
         _write_time_buckets(last_fri_sorted, output_path_last_fri, '15m_bucket_start_et')
+
+        last_fri_utc = last_fri_sorted.copy()
+        last_fri_utc['15m_bucket_start_utc'] = last_fri_utc['15m_bucket_start_et'].dt.tz_convert('UTC')
+        last_fri_utc = last_fri_utc[['15m_bucket_start_utc', 'total_count']]
+        _write_time_buckets_utc_z(last_fri_utc, output_path_last_fri_utc, '15m_bucket_start_utc')
+
     return full_csv_bytes
 
 

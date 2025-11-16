@@ -6,17 +6,17 @@ from datetime import datetime
 import pytz
 import requests
 
-from src.sanitize import DOWNLOAD_DIR, count_tweets, create_clean_timestamps_csv, get_average_tweets_per_day, \
+from src.sanitize import DOWNLOAD_DIR_MAIN, count_tweets, create_clean_timestamps_csv, get_average_tweets_per_day, \
     get_first_tweet_timestamp, process_by_15min, process_by_date, process_by_hour, process_by_week, process_by_weekday, \
     sanitize_csv_to_file, save_tweets_to_csv
 
 logger = logging.getLogger(__name__)
 
-RAW_PATH = os.path.join(DOWNLOAD_DIR, 'raw_elonmusk.csv')
-PRE_PATH = os.path.join(DOWNLOAD_DIR, 'pre_elonmusk.csv')
-CLEAN_PATH = os.path.join(DOWNLOAD_DIR, 'clean_elonmusk.csv')
-CC_PATH = os.path.join(DOWNLOAD_DIR, 'cc_elonmusk.csv')
-UTC_PATH = os.path.join(DOWNLOAD_DIR, 'utc_elonmusk.csv')
+RAW_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'raw_elonmusk.csv')
+PRE_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'pre_elonmusk.csv')
+CLEAN_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'clean_elonmusk.csv')
+CC_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'cc_elonmusk.csv')
+UTC_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'utc_elonmusk.csv')
 
 ENCODING = 'utf-8'
 
