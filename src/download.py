@@ -28,18 +28,24 @@ def _check_modify_date(path: str, modify_date: float = 300) -> bool:
     )
 
 
-def _download() -> bytes:
+def _download_all() -> tuple[bytes, bytes, bytes]:
     """
     Download the full Elon Musk tweet CSV if local files are fresh; otherwise fetch from API.
     Sanitizes, processes, and saves aggregated results to disk.
 
-    Returns the processed CSV content as bytes.
+    Returns:
+        tuple of (clean_csv_bytes, utc_csv_bytes, cc_csv_bytes)
     """
     # Check cache freshness (5 minutes)
     if all(_check_modify_date(p) for p in (RAW_PATH, PRE_PATH, CLEAN_PATH, UTC_PATH, CC_PATH)):
-        logger.info('Using cached file: %s', CLEAN_PATH)
+        logger.info('Using cached files')
         with open(CLEAN_PATH, 'rb') as f:
-            return f.read()
+            clean_bytes = f.read()
+        with open(UTC_PATH, 'rb') as f:
+            utc_bytes = f.read()
+        with open(CC_PATH, 'rb') as f:
+            cc_bytes = f.read()
+        return (clean_bytes, utc_bytes, cc_bytes)
     else:
         logger.info('Downloading fresh data from XTracker API')
         resp = requests.post(
@@ -52,8 +58,19 @@ def _download() -> bytes:
         logger.info('Download status code: %s', resp.status_code)
         save_tweets_to_csv(resp.content, RAW_PATH)
         pre_bytes = sanitize_csv_to_file(resp.content, PRE_PATH)
-        clean_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH, UTC_PATH, CC_PATH)
-        return clean_bytes
+        clean_bytes, utc_bytes, cc_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH, UTC_PATH, CC_PATH)
+        return (clean_bytes, utc_bytes, cc_bytes)
+
+
+def _download() -> bytes:
+    """
+    Download the full Elon Musk tweet CSV if local files are fresh; otherwise fetch from API.
+    Sanitizes, processes, and saves aggregated results to disk.
+
+    Returns the processed clean CSV content as bytes.
+    """
+    clean_bytes, _, _ = _download_all()
+    return clean_bytes
 
 
 def get_tweets_by_hour() -> str:
@@ -98,3 +115,15 @@ def get_data_range() -> int:
     first_tweet = get_first_tweet_timestamp(_download()).astimezone(pytz.timezone('America/New_York'))
     now_et = datetime.now(pytz.timezone('America/New_York'))
     return int((now_et - first_tweet).total_seconds())
+
+
+def get_utc_csv() -> str:
+    """Return the utc_elonmusk.csv file as bytes."""
+    _, utc_bytes, _ = _download_all()
+    return utc_bytes.decode(ENCODING)
+
+
+def get_cc_csv() -> str:
+    """Return the cc_elonmusk.csv file as bytes (recent 6 months)."""
+    _, _, cc_bytes = _download_all()
+    return cc_bytes.decode(ENCODING)

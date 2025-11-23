@@ -6,8 +6,9 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from src.download import (
-    get_avg_per_day, get_data_range, get_first_tweet_date, get_time_now, get_total_tweets, get_tweets_by_15min,
-    get_tweets_by_date, get_tweets_by_hour, get_tweets_by_week, get_tweets_by_weekday)
+    get_avg_per_day, get_cc_csv, get_data_range, get_first_tweet_date, get_time_now, get_total_tweets,
+    get_tweets_by_15min, get_tweets_by_date, get_tweets_by_hour, get_tweets_by_week, get_tweets_by_weekday,
+    get_utc_csv)
 
 mcp = FastMCP(
     name="xtracker-mcp",
@@ -85,6 +86,18 @@ def data_timespan() -> int:
     return get_data_range()
 
 
+@mcp.tool()
+def utc_csv_bytes() -> str:
+    """Return the utc_elonmusk.csv file as raw bytes."""
+    return get_utc_csv()
+
+
+@mcp.tool()
+def cc_csv_bytes() -> str:
+    """Return the cc_elonmusk.csv file (recent 6 months) as raw bytes."""
+    return get_cc_csv()
+
+
 # ---------- HTTP app and routes ----------
 app = mcp.streamable_http_app()  # MCP routes live at /mcp/
 
@@ -123,6 +136,8 @@ avg_day = _make_stream_handler(get_avg_per_day)
 iso_first_tweet = _make_stream_handler(get_first_tweet_date)
 now = _make_stream_handler(get_time_now)
 data_span = _make_stream_handler(get_data_range)
+utc_csv = _make_stream_handler(get_utc_csv)
+cc_csv = _make_stream_handler(get_cc_csv)
 
 # Starlette route registration
 app.add_route("/", bump, methods=["GET", "POST"])  # healthcheck
@@ -137,3 +152,5 @@ app.add_route("/avg_per_day", avg_day, methods=["GET"])  # float as text
 app.add_route("/first_tweet_date", iso_first_tweet, methods=["GET"])  # ISO string
 app.add_route("/time_now", now, methods=["GET"])  # ISO string
 app.add_route("/data_span", data_span, methods=["GET"])  # int seconds as text
+app.add_route("/utc_csv", utc_csv, methods=["GET"])  # CSV bytes (UTC timestamps)
+app.add_route("/cc_csv", cc_csv, methods=["GET"])  # CSV bytes (recent 6 months ET)

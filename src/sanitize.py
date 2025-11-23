@@ -198,8 +198,12 @@ def create_clean_timestamps_csv(
         output_path_utc: str,
         output_path_cc: str,
         trim_to_months: int = 6
-) -> bytes:
-    """Persist timestamp-only CSVs (ET, UTC, and recent window) derived from sanitized data."""
+) -> tuple[bytes, bytes, bytes]:
+    """Persist timestamp-only CSVs (ET, UTC, and recent window) derived from sanitized data.
+    
+    Returns:
+        tuple of (et_csv_bytes, utc_csv_bytes, cc_csv_bytes)
+    """
 
     def _empty_csv_bytes() -> bytes:
         return _dataframe_to_csv_bytes(pd.DataFrame(columns=['timestamp']))
@@ -222,7 +226,7 @@ def create_clean_timestamps_csv(
         empty_csv = _empty_csv_bytes()
         for path in (output_path, output_path_utc, output_path_cc):
             save_tweets_to_csv(empty_csv, path)
-        return empty_csv
+        return (empty_csv, empty_csv, empty_csv)
 
     # Coerce ids and drop invalid rows
     ids = pd.to_numeric(df['id'], errors='coerce').dropna()
@@ -230,7 +234,7 @@ def create_clean_timestamps_csv(
         empty_csv = _empty_csv_bytes()
         for path in (output_path, output_path_utc, output_path_cc):
             save_tweets_to_csv(empty_csv, path)
-        return empty_csv
+        return (empty_csv, empty_csv, empty_csv)
 
     ids = ids.astype('int64')
 
@@ -253,7 +257,7 @@ def create_clean_timestamps_csv(
     ###
     process_by_15min(et_csv_bytes)
     ###
-    return et_csv_bytes
+    return (et_csv_bytes, utc_csv_bytes, cc_csv_bytes)
 
 
 def process_by_date(
