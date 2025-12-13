@@ -7,12 +7,13 @@ from starlette.responses import StreamingResponse
 
 from src.download import (
     get_avg_per_day, get_cc_csv, get_data_range, get_first_tweet_date, get_time_now, get_total_tweets,
-    get_tweets_by_15min, get_tweets_by_date, get_tweets_by_hour, get_tweets_by_week, get_tweets_by_weekday,
-    get_utc_csv)
+    get_tweets_by_15min, get_tweets_by_date, get_tweets_by_hour, get_tweets_by_week, get_tweets_by_weekday, get_utc_csv,
+)
 from src.download_polymarket import (
-    get_avg_per_day_pm, get_cc_csv_pm, get_data_range_pm, get_first_tweet_date_pm, get_time_now_pm,
-    get_total_tweets_pm, get_tweets_by_15min_pm, get_tweets_by_date_pm, get_tweets_by_hour_pm,
-    get_tweets_by_week_pm, get_tweets_by_weekday_pm, get_utc_csv_pm)
+    get_avg_per_day_pm, get_cc_csv_pm, get_data_range_pm, get_first_tweet_date_pm, get_latest_counts_pm, get_time_now_pm,
+    get_total_tweets_pm, get_tweets_by_15min_pm, get_tweets_by_date_pm, get_tweets_by_hour_pm, get_tweets_by_week_pm,
+    get_tweets_by_weekday_pm, get_utc_csv_pm,
+)
 
 mcp = FastMCP(
     name="xtracker-mcp",
@@ -128,6 +129,12 @@ def tweets_by_week_grouped_pm() -> str:
 
 
 @mcp.tool()
+def latest_counts_pm() -> str:
+    """Return tweet counts since the most recent Tuesday and Friday noon ET from Polymarket data as CSV text."""
+    return get_latest_counts_pm()
+
+
+@mcp.tool()
 def tweets_by_15min_grouped_pm() -> str:
     """Return tweet counts grouped into 15-minute buckets (ET) from Polymarket data as CSV text."""
     return get_tweets_by_15min_pm()
@@ -192,7 +199,8 @@ def _make_stream_handler(func: Callable[[], Any]) -> Callable[[Request], Streami
             return StreamingResponse(body, media_type="text/event-stream")
         except Exception as exc:
             logging.getLogger(__name__).exception(
-                "Unhandled error in handler for %s", getattr(func, "__name__", str(func)))
+                "Unhandled error in handler for %s", getattr(func, "__name__", str(func)),
+            )
             return StreamingResponse(f"error: {exc}", status_code=500, media_type="text/event-stream")
 
     return handler
@@ -221,6 +229,7 @@ hour_pm = _make_stream_handler(get_tweets_by_hour_pm)
 date_pm = _make_stream_handler(get_tweets_by_date_pm)
 weekday_pm = _make_stream_handler(get_tweets_by_weekday_pm)
 week_pm = _make_stream_handler(get_tweets_by_week_pm)
+latest_pm = _make_stream_handler(get_latest_counts_pm)
 fifteen_pm = _make_stream_handler(get_tweets_by_15min_pm)
 total_pm = _make_stream_handler(get_total_tweets_pm)
 avg_day_pm = _make_stream_handler(get_avg_per_day_pm)
@@ -251,6 +260,7 @@ app.add_route("/pm/hour", hour_pm, methods=["GET"])  # CSV
 app.add_route("/pm/date", date_pm, methods=["GET"])  # CSV
 app.add_route("/pm/weekday", weekday_pm, methods=["GET"])  # CSV
 app.add_route("/pm/week", week_pm, methods=["GET"])  # CSV
+app.add_route("/pm/latest", latest_pm, methods=["GET"])  # CSV counts since last Tue/Fri noon ET
 app.add_route("/pm/15min", fifteen_pm, methods=["GET"])  # CSV
 app.add_route("/pm/total", total_pm, methods=["GET"])  # integer as text
 app.add_route("/pm/avg_per_day", avg_day_pm, methods=["GET"])  # float as text

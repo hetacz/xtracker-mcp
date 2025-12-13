@@ -12,7 +12,7 @@ import requests
 from src.db import (
     append_tweets,
     database_to_csv_with_timestamps,
-    get_most_recent_timestamp
+    get_most_recent_timestamp,
 )
 from src.sanitize import (
     DOWNLOAD_DIR,
@@ -25,8 +25,9 @@ from src.sanitize import (
     process_by_hour,
     process_by_week,
     process_by_weekday,
+    process_last_tue_fri_counts,
     sanitize_csv_to_file,
-    save_tweets_to_csv
+    save_tweets_to_csv,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,8 +55,8 @@ ENCODING = 'utf-8'
 def _check_modify_date(path: str, modify_date: float = 300) -> bool:
     """Check if file exists and was modified within the specified time window."""
     return (
-            os.path.exists(path)
-            and time.time() - os.path.getmtime(path) < modify_date
+        os.path.exists(path)
+        and time.time() - os.path.getmtime(path) < modify_date
     )
 
 
@@ -79,8 +80,8 @@ def _sanitize_text(text: str) -> str:
 
 
 def fetch_tweets_from_api(
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> list[dict[str, str]]:
     """Fetch tweets from Polymarket API.
 
@@ -128,7 +129,8 @@ def fetch_tweets_from_api(
                     {
                         'id': str(platform_id),
                         'text': _sanitize_text(content)
-                    })
+                    },
+                )
 
         logger.info(f"Extracted {len(tweets)} valid tweets")
         return tweets
@@ -139,9 +141,9 @@ def fetch_tweets_from_api(
 
 
 def fetch_and_update_database(
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        auto_detect_start: bool = True
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    auto_detect_start: bool = True,
 ) -> tuple[int, int]:
     """Fetch new tweets from API and update the database.
 
@@ -205,7 +207,7 @@ def _download_all_pm() -> tuple[bytes, bytes, bytes]:
 
         # Create clean timestamps
         clean_bytes, utc_bytes, cc_bytes = create_clean_timestamps_csv(
-            pre_bytes, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH
+            pre_bytes, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH,
         )
 
         return (clean_bytes, utc_bytes, cc_bytes)
@@ -237,6 +239,11 @@ def get_tweets_by_weekday_pm() -> str:
 def get_tweets_by_week_pm() -> str:
     """Return tweet counts grouped by week (starts on Friday 12:00 ET) as CSV text."""
     return process_by_week(_download_pm()).decode(ENCODING)
+
+
+def get_latest_counts_pm() -> str:
+    """Return total tweet counts since last Tuesday and Friday at noon ET as CSV text."""
+    return process_last_tue_fri_counts(_download_pm()).decode(ENCODING)
 
 
 def get_tweets_by_15min_pm() -> str:

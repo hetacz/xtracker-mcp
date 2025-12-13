@@ -11,6 +11,7 @@ from pandas import DataFrame
 
 TWITTER_EPOCH_MS = 1288834974657
 ET_TZ = pytz.timezone('America/New_York')
+WEEKDAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOWNLOAD_DIR = os.path.join(ROOT_DIR, "downloads")
 DOWNLOAD_DIR_MAIN = os.path.join(DOWNLOAD_DIR, "main")
@@ -69,9 +70,9 @@ def _ensure_parent_dir(path: str) -> None:
 
 
 def _dataframe_to_csv_bytes(
-        df: DataFrame,
-        *,
-        columns: Iterable[str] | None = None
+    df: DataFrame,
+    *,
+    columns: Iterable[str] | None = None,
 ) -> bytes:
     if columns is not None:
         df = df.loc[:, list(columns)]
@@ -79,10 +80,10 @@ def _dataframe_to_csv_bytes(
 
 
 def _write_dataframe(
-        df: DataFrame,
-        path: str,
-        *,
-        columns: Iterable[str] | None = None
+    df: DataFrame,
+    path: str,
+    *,
+    columns: Iterable[str] | None = None,
 ) -> bytes:
     csv_bytes = _dataframe_to_csv_bytes(df, columns=columns)
     save_tweets_to_csv(csv_bytes, path)
@@ -91,6 +92,43 @@ def _write_dataframe(
 
 def _isoformat_series(series: pd.Series, *, timespec: str = "seconds") -> pd.Series:
     return series.map(lambda d: d.isoformat(timespec=timespec))
+
+
+def _last_weekday_noon_et(target_weekday: int, *, now: pd.Timestamp | None = None) -> pd.Timestamp:
+    """Return the most recent occurrence of target_weekday at 12:00 ET, DST-aware."""
+    if target_weekday not in range(7):
+        raise ValueError("target_weekday must be in range 0..6 (0=Mon .. 6=Sun).")
+    current = now or pd.Timestamp.now(tz=ET_TZ)
+    today_date = current.date()
+    days_back = (current.weekday() - target_weekday) % 7
+    if days_back == 0:
+        today_noon_naive = pd.Timestamp(
+            year=today_date.year,
+            month=today_date.month,
+            day=today_date.day,
+            hour=12,
+        )
+        today_noon = today_noon_naive.tz_localize(ET_TZ)
+        if current >= today_noon:
+            return today_noon
+        days_back = 7
+
+    target_date = today_date - pd.Timedelta(days=days_back)
+    target_noon_naive = pd.Timestamp(
+        year=target_date.year,
+        month=target_date.month,
+        day=target_date.day,
+        hour=12,
+    )
+    return target_noon_naive.tz_localize(ET_TZ)
+
+
+def _next_week_noon_et(start_noon: pd.Timestamp) -> pd.Timestamp:
+    """Return the next week's local noon for the same weekday, DST-aware."""
+    date_et = start_noon.tz_convert(ET_TZ).to_pydatetime().date()
+    date_next = date_et + pd.Timedelta(days=7)
+    start_naive = pd.Timestamp(year=date_next.year, month=date_next.month, day=date_next.day)
+    return (start_naive + pd.Timedelta(hours=12)).tz_localize(ET_TZ)
 
 
 def _anchors_noon_weekday_et(ts_et: pd.Series, anchor_weekday: int) -> pd.Series:
@@ -140,8 +178,8 @@ def _write_time_buckets(df: DataFrame, path: str, column: str) -> bytes:
 
 # compare length with ids found in raw?
 def sanitize_csv_to_file(
-        input_data: Union[bytes, str],
-        output_path: str,
+    input_data: Union[bytes, str],
+    output_path: str,
 ) -> bytes:
     text = input_data.decode(ENCODING, errors='replace') if isinstance(input_data, bytes) else input_data
     dir_name = os.path.dirname(output_path)
@@ -193,11 +231,11 @@ def sanitize_csv_to_file(
 
 
 def create_clean_timestamps_csv(
-        input_data: Union[bytes, str],
-        output_path: str,
-        output_path_utc: str,
-        output_path_cc: str,
-        trim_to_months: int = 6
+    input_data: Union[bytes, str],
+    output_path: str,
+    output_path_utc: str,
+    output_path_cc: str,
+    trim_to_months: int = 6,
 ) -> tuple[bytes, bytes, bytes]:
     """Persist timestamp-only CSVs (ET, UTC, and recent window) derived from sanitized data.
     
@@ -261,8 +299,9 @@ def create_clean_timestamps_csv(
 
 
 def process_by_date(
-        file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_date.csv')) -> bytes:
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR, 'by_date.csv'),
+) -> bytes:
     """Aggregate tweets per calendar day (ET), filling gaps with zero counts."""
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
@@ -290,8 +329,9 @@ def process_by_date(
 
 
 def process_by_hour(
-        file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_hour.csv')) -> bytes:
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR, 'by_hour.csv'),
+) -> bytes:
     """Aggregate tweets per clock hour (ET) with normalized frequency and a daily average."""
     ts = _timestamps_et_from_bytes(file_bytes)
     hours = pd.Index(range(24), name='hour')
@@ -316,14 +356,15 @@ def process_by_hour(
             'total_count': counts.values,
             'avg': avg.values,
             'normalized': normalized.values,
-        }
+        },
     )
     return _write_dataframe(out_df, output_path)
 
 
 def process_by_weekday(
-        file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_weekday.csv')) -> bytes:
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR, 'by_weekday.csv'),
+) -> bytes:
     """Aggregate tweets by weekday with average-per-occurrence and normalized proportions."""
     ts = _timestamps_et_from_bytes(file_bytes)
     days_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -354,17 +395,18 @@ def process_by_weekday(
             'total_count': counts.values,
             'avg': avg_per_weekday.values,
             'normalized': norm.values,
-        })
+        },
+    )
 
     return _write_dataframe(out_df, output_path)
 
 
 # TODO remove first week maybe as not full data OR remove all data behind this cutoff
 def process_by_week(
-        file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv'),
-        anchor_weekday: int = 4,
-        include_empty: bool = True
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv'),
+    anchor_weekday: int = 4,
+    include_empty: bool = True,
 ) -> bytes:
     """Aggregate tweets per anchored week (default: Friday noon) with optional gap filling."""
     ts = _timestamps_et_from_bytes(file_bytes)
@@ -410,18 +452,60 @@ def process_by_week(
     return _write_dataframe(out_df, output_path)
 
 
+def _last_week_count_row(ts: pd.Series, anchor_weekday: int, now_et: pd.Timestamp) -> dict[str, object]:
+    start = _last_weekday_noon_et(anchor_weekday, now=now_et)
+    count = int(ts.loc[(ts >= start) & (ts <= now_et)].shape[0]) if not ts.empty else 0
+    return {
+        "weekday": WEEKDAY_LABELS[anchor_weekday],
+        "window_start_et": start.isoformat(),
+        "total_count": count,
+    }
+
+
+def process_last_week_counts(
+    file_bytes: bytes,
+    anchor_weekday: int,
+    output_path: str | None = None,
+) -> bytes:
+    """Return tweet counts since the most recent anchor weekday noon ET."""
+    if anchor_weekday not in range(7):
+        raise ValueError("anchor_weekday must be in range 0..6 (0=Mon .. 6=Sun).")
+    ts = _timestamps_et_from_bytes(file_bytes)
+    now_et = pd.Timestamp.now(tz=ET_TZ)
+    row = _last_week_count_row(ts, anchor_weekday, now_et)
+    path = output_path or os.path.join(DOWNLOAD_DIR, f"last_week_counts_{anchor_weekday}.csv")
+    out_df = pd.DataFrame([row])
+    if output_path is None:
+        return _dataframe_to_csv_bytes(out_df)
+    return _write_dataframe(out_df, path)
+
+
+def process_last_tue_fri_counts(
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR, 'last_tue_fri_counts.csv'),
+) -> bytes:
+    """Return counts since the most recent Tuesday and Friday at noon ET."""
+    parts = []
+    for anchor in (1, 4):
+        csv_bytes = process_last_week_counts(file_bytes, anchor, output_path=None)
+        df_part = pd.read_csv(io.BytesIO(csv_bytes))
+        parts.append(df_part)
+    out_df = pd.concat(parts, ignore_index=True).sort_values("window_start_et", kind="stable")
+    return _write_dataframe(out_df, output_path)
+
+
 def process_by_15min(
-        file_bytes: bytes,
-        output_path: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min.csv'),
-        output_path_recent: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_recent.csv'),
-        output_path_last_tue: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_tue.csv'),
-        output_path_last_fri: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_fri.csv'),
-        output_path_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_utc.csv'),
-        output_path_recent_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_recent_utc.csv'),
-        output_path_last_tue_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_tue_utc.csv'),
-        output_path_last_fri_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_fri_utc.csv'),
-        include_empty: bool = False,
-        months: int = 6,
+    file_bytes: bytes,
+    output_path: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min.csv'),
+    output_path_recent: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_recent.csv'),
+    output_path_last_tue: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_tue.csv'),
+    output_path_last_fri: str = os.path.join(DOWNLOAD_DIR_15_ET, 'by_15min_last_fri.csv'),
+    output_path_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_utc.csv'),
+    output_path_recent_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_recent_utc.csv'),
+    output_path_last_tue_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_tue_utc.csv'),
+    output_path_last_fri_utc: str = os.path.join(DOWNLOAD_DIR_15_UTC, 'by_15min_last_fri_utc.csv'),
+    include_empty: bool = False,
+    months: int = 6,
 ) -> bytes:
     """Aggregate tweets into 15-minute ET buckets plus recent and weekday-specific slices.
 
@@ -501,85 +585,27 @@ def process_by_15min(
     recent_utc = recent_utc[['15m_bucket_start_utc', 'total_count']]
     _write_time_buckets_utc_z(recent_utc, output_path_recent_utc, '15m_bucket_start_utc')
 
-    def _last_weekday_noon_et(target_weekday: int) -> pd.Timestamp:
-        """Find the most recent occurrence of target_weekday at noon ET.
-
-        If today is the target weekday and we're past noon, return today's noon.
-        Otherwise, return the most recent past occurrence.
-
-        Uses calendar date arithmetic to avoid DST issues.
-
-        Args:
-            target_weekday: 0=Mon, 1=Tue, ..., 6=Sun
-        """
-        now = pd.Timestamp.now(tz=ET_TZ)
-
-        # Get today's date as a Python date object
-        today_date = now.date()
-
-        # Calculate how many calendar days to go back
-        days_back = (now.weekday() - target_weekday) % 7
-
-        # Special case: if today is the target weekday
-        if days_back == 0:
-            # Check if we're past noon today
-            today_noon_naive = pd.Timestamp(
-                year=today_date.year, month=today_date.month,
-                day=today_date.day, hour=12)
-            today_noon = today_noon_naive.tz_localize(ET_TZ)
-
-            if now >= today_noon:
-                return today_noon
-            else:
-                # Before noon, go back 7 days
-                days_back = 7
-
-        # Calculate target date using calendar arithmetic
-        from datetime import timedelta
-        target_date = today_date - timedelta(days=days_back)
-
-        # Construct noon timestamp for that date
-        target_noon_naive = pd.Timestamp(
-            year=target_date.year, month=target_date.month,
-            day=target_date.day, hour=12)
-        return target_noon_naive.tz_localize(ET_TZ)
-
-    def _next_week_noon_et(start_noon: pd.Timestamp) -> pd.Timestamp:
-        """Return the next week's local noon for the same weekday, DST-aware (167/169h).
-
-        We compute by taking the date part in ET and constructing a new naive
-        datetime at 12:00, then tz-localize to ET. This preserves wall-clock noon
-        across DST transitions instead of adding a fixed 168h.
-        """
-        d = start_noon.tz_convert(ET_TZ).to_pydatetime().date()
-        d_next = d + pd.Timedelta(days=7)
-        # Build naive midnight then add 12:00 and localize
-        end_naive_midnight = pd.Timestamp(year=d_next.year, month=d_next.month, day=d_next.day)
-        end_noon = (end_naive_midnight + pd.Timedelta(hours=12)).tz_localize(ET_TZ)
-        return end_noon
-
     # Noon-to-noon week windows
-    tue_start = _last_weekday_noon_et(1)
+    tue_start = _last_weekday_noon_et(1, now=now_et)
     tue_end = _next_week_noon_et(tue_start)
-    fri_start = _last_weekday_noon_et(4)
+    fri_start = _last_weekday_noon_et(4, now=now_et)
     fri_end = _next_week_noon_et(fri_start)
-
-    # If we're past the corresponding noon boundary, return empty slices
-    now_et = pd.Timestamp.now(tz=ET_TZ)
 
     if now_et >= tue_end:
         empty_tue = pd.DataFrame(
             {
                 '15m_bucket_start_et': pd.Series([], dtype='datetime64[ns, America/New_York]'),
                 'total_count': pd.Series([], dtype='int64')
-            })
+            },
+        )
         _write_time_buckets(empty_tue, output_path_last_tue, '15m_bucket_start_et')
 
         empty_tue_utc = pd.DataFrame(
             {
                 '15m_bucket_start_utc': pd.Series([], dtype='datetime64[ns, UTC]'),
                 'total_count': pd.Series([], dtype='int64')
-            })
+            },
+        )
         _write_time_buckets_utc_z(empty_tue_utc, output_path_last_tue_utc, '15m_bucket_start_utc')
     else:
         last_tue = grouped_dt.loc[(grouped_dt['15m_bucket_start_et'] >= tue_start) &
@@ -598,14 +624,16 @@ def process_by_15min(
             {
                 '15m_bucket_start_et': pd.Series([], dtype='datetime64[ns, America/New_York]'),
                 'total_count': pd.Series([], dtype='int64')
-            })
+            },
+        )
         _write_time_buckets(empty_fri, output_path_last_fri, '15m_bucket_start_et')
 
         empty_fri_utc = pd.DataFrame(
             {
                 '15m_bucket_start_utc': pd.Series([], dtype='datetime64[ns, UTC]'),
                 'total_count': pd.Series([], dtype='int64')
-            })
+            },
+        )
         _write_time_buckets_utc_z(empty_fri_utc, output_path_last_fri_utc, '15m_bucket_start_utc')
     else:
         last_fri = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= fri_start].copy()

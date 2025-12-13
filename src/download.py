@@ -6,9 +6,11 @@ from datetime import datetime
 import pytz
 import requests
 
-from src.sanitize import DOWNLOAD_DIR_MAIN, count_tweets, create_clean_timestamps_csv, get_average_tweets_per_day, \
-    get_first_tweet_timestamp, process_by_15min, process_by_date, process_by_hour, process_by_week, process_by_weekday, \
-    sanitize_csv_to_file, save_tweets_to_csv
+from src.sanitize import (
+    DOWNLOAD_DIR_MAIN, count_tweets, create_clean_timestamps_csv, get_average_tweets_per_day,
+    get_first_tweet_timestamp, process_by_15min, process_by_date, process_by_hour, process_by_week, process_by_weekday,
+    process_last_tue_fri_counts, sanitize_csv_to_file, save_tweets_to_csv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,8 @@ ENCODING = 'utf-8'
 
 def _check_modify_date(path: str, modify_date: float = 300) -> bool:
     return (
-            os.path.exists(path)
-            and time.time() - os.path.getmtime(path) < modify_date
+        os.path.exists(path)
+        and time.time() - os.path.getmtime(path) < modify_date
     )
 
 

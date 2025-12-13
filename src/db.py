@@ -20,7 +20,7 @@ os.makedirs(HISTORIC_DIR, exist_ok=True)
 
 
 def _snowflake_to_datetime(snowflake_id: int) -> datetime:
-    """Convert a Twitter Snowflake ID to an UTC timezone-aware datetime."""
+    """Convert a Twitter Snowflake ID to a UTC timezone-aware datetime."""
     ts_ms = (int(snowflake_id) >> 22) + TWITTER_EPOCH_MS
     ts_s = ts_ms / 1000.0
     return datetime.fromtimestamp(ts_s, tz=timezone.utc)
