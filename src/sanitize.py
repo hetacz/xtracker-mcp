@@ -94,6 +94,12 @@ def _isoformat_series(series: pd.Series, *, timespec: str = "seconds") -> pd.Ser
     return series.map(lambda d: d.isoformat(timespec=timespec))
 
 
+def _anchor_label(anchor_weekday: int) -> str:
+    if anchor_weekday not in range(7):
+        raise ValueError("anchor_weekday must be in range 0..6 (0=Mon .. 6=Sun).")
+    return WEEKDAY_LABELS[anchor_weekday][:3].lower()
+
+
 def _last_weekday_noon_et(target_weekday: int, *, now: pd.Timestamp | None = None) -> pd.Timestamp:
     """Return the most recent occurrence of target_weekday at 12:00 ET, DST-aware."""
     if target_weekday not in range(7):
@@ -264,7 +270,7 @@ def create_clean_timestamps_csv(
         empty_csv = _empty_csv_bytes()
         for path in (output_path, output_path_utc, output_path_cc):
             save_tweets_to_csv(empty_csv, path)
-        return (empty_csv, empty_csv, empty_csv)
+        return empty_csv, empty_csv, empty_csv
 
     # Coerce ids and drop invalid rows
     ids = pd.to_numeric(df['id'], errors='coerce').dropna()
@@ -272,7 +278,7 @@ def create_clean_timestamps_csv(
         empty_csv = _empty_csv_bytes()
         for path in (output_path, output_path_utc, output_path_cc):
             save_tweets_to_csv(empty_csv, path)
-        return (empty_csv, empty_csv, empty_csv)
+        return empty_csv, empty_csv, empty_csv
 
     ids = ids.astype('int64')
 
@@ -295,7 +301,7 @@ def create_clean_timestamps_csv(
     ###
     process_by_15min(et_csv_bytes)
     ###
-    return (et_csv_bytes, utc_csv_bytes, cc_csv_bytes)
+    return et_csv_bytes, utc_csv_bytes, cc_csv_bytes
 
 
 def process_by_date(
@@ -401,18 +407,37 @@ def process_by_weekday(
     return _write_dataframe(out_df, output_path)
 
 
-# TODO remove first week maybe as not full data OR remove all data behind this cutoff
 def process_by_week(
     file_bytes: bytes,
-    output_path: str = os.path.join(DOWNLOAD_DIR, 'by_week.csv'),
+    output_path: str | None = None,  # todo removal
     anchor_weekday: int = 4,
     include_empty: bool = True,
+    use_utc: bool = False,
 ) -> bytes:
-    """Aggregate tweets per anchored week (default: Friday noon) with optional gap filling."""
+    """Aggregate tweets per anchored week (default: Friday noon) with optional gap filling.
+
+    The initial partial week (when data starts after the anchor boundary) is dropped
+    so we only report full weekly buckets. When output_path is omitted, results are
+    written to downloads/by_week_{ddd}[ _utc].csv where ddd is the 3-letter anchor
+    weekday.
+    """
+    anchor_label = _anchor_label(anchor_weekday)
+    suffix = "_utc" if use_utc else ""
+    path = output_path or os.path.join(DOWNLOAD_DIR, f"by_week_{anchor_label}{suffix}.csv")
+    col_name = "week_start_utc" if use_utc else "week_start_et"
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
-        out_df = pd.DataFrame(columns=['week_start_et', 'total_count'])
-        return _write_dataframe(out_df, output_path)
+        out_df = pd.DataFrame(columns=[col_name, 'total_count'])
+        return _write_dataframe(out_df, path)
+
+    # Trim off the first partial week so weekly counts represent complete coverage.
+    first_ts = ts.min()
+    first_anchor = _anchors_noon_weekday_et(pd.Series([first_ts]), anchor_weekday).iloc[0]
+    first_full_anchor = first_anchor if first_ts <= first_anchor else _next_week_noon_et(first_anchor)
+    ts = ts[ts >= first_full_anchor]
+    if ts.empty:
+        out_df = pd.DataFrame(columns=[col_name, 'total_count'])
+        return _write_dataframe(out_df, path)
 
     anchors = _anchors_noon_weekday_et(ts, anchor_weekday)
     grouped = (
@@ -424,19 +449,13 @@ def process_by_week(
 
     if include_empty:
         # Build a DST-aware weekly index by iterating local-noon to next week's local-noon
-        def _next_week_noon(local_noon: pd.Timestamp) -> pd.Timestamp:
-            d = local_noon.tz_convert(ET_TZ).to_pydatetime().date()
-            d_next = d + pd.Timedelta(days=7)
-            start_naive = pd.Timestamp(year=d_next.year, month=d_next.month, day=d_next.day)
-            return (start_naive + pd.Timedelta(hours=12)).tz_localize(ET_TZ)
-
         start = grouped["anchor_et"].min()
         end = grouped["anchor_et"].max()
         idx = [start]
         cur = start
         # Iterate until we've reached/passed the last anchor
         while cur < end:
-            cur = _next_week_noon(cur)
+            cur = _next_week_noon_et(cur)
             idx.append(cur)
         full_idx = pd.DatetimeIndex(idx, tz=ET_TZ)
 
@@ -447,9 +466,13 @@ def process_by_week(
             .reset_index()
         )
 
-    grouped["week_start_et"] = grouped["anchor_et"].map(lambda x: x.isoformat())
-    out_df = grouped[["week_start_et", "total_count"]].sort_values("week_start_et", kind="stable")
-    return _write_dataframe(out_df, output_path)
+    if use_utc:
+        grouped[col_name] = grouped["anchor_et"].map(lambda x: x.tz_convert("UTC").isoformat())
+        out_df = grouped[[col_name, "total_count"]].sort_values(col_name, kind="stable")
+    else:
+        grouped[col_name] = grouped["anchor_et"].map(lambda x: x.isoformat())
+        out_df = grouped[[col_name, "total_count"]].sort_values(col_name, kind="stable")
+    return _write_dataframe(out_df, path)
 
 
 def _last_week_count_row(ts: pd.Series, anchor_weekday: int, now_et: pd.Timestamp) -> dict[str, object]:
@@ -480,16 +503,26 @@ def process_last_week_counts(
     return _write_dataframe(out_df, path)
 
 
-def process_last_tue_fri_counts(
+def _refresh_weekly_csvs_utc(file_bytes: bytes) -> None:
+    """Regenerate weekly UTC aggregates for every anchor weekday, writing CSVs to downloads/."""
+    for anchor in range(7):
+        process_by_week(file_bytes, None, anchor, True, True)
+
+
+def process_last_tue_fri_counts_with_weekly_refresh(
     file_bytes: bytes,
     output_path: str = os.path.join(DOWNLOAD_DIR, 'last_tue_fri_counts.csv'),
 ) -> bytes:
-    """Return counts since the most recent Tuesday and Friday at noon ET."""
+    """Return Tue/Fri counts while refreshing weekly UTC CSVs for all anchor weekdays."""
     parts = []
     for anchor in (1, 4):
         csv_bytes = process_last_week_counts(file_bytes, anchor, output_path=None)
         df_part = pd.read_csv(io.BytesIO(csv_bytes))
         parts.append(df_part)
+
+    # Refresh weekly UTC aggregates for every anchor weekday alongside the Tue/Fri counts.
+    _refresh_weekly_csvs_utc(file_bytes)
+
     out_df = pd.concat(parts, ignore_index=True).sort_values("window_start_et", kind="stable")
     return _write_dataframe(out_df, output_path)
 
@@ -577,7 +610,7 @@ def process_by_15min(
     cutoff_aligned = _align_now_to_minutes(cutoff_raw, 15)
     recent = grouped_dt.loc[grouped_dt['15m_bucket_start_et'] >= cutoff_aligned].copy()
     recent_sorted = recent.sort_values('15m_bucket_start_et', kind='stable')
-    recent_csv_bytes = _write_time_buckets(recent_sorted, output_path_recent, '15m_bucket_start_et')
+    _write_time_buckets(recent_sorted, output_path_recent, '15m_bucket_start_et')
 
     # Recent window (UTC)
     recent_utc = recent_sorted.copy()

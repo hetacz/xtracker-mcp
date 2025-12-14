@@ -44,9 +44,9 @@ def tweets_by_weekday_grouped() -> str:
 
 
 @mcp.tool()
-def tweets_by_week_grouped() -> str:
-    """Return tweet counts grouped by week (starts on Friday 12:00 ET) as CSV text."""
-    return get_tweets_by_week()
+def tweets_by_week_grouped(anchor: int = 4, utc: bool = False) -> str:
+    """Return tweet counts grouped by week (anchor weekday 0=Mon .. 6=Sun, default Friday noon ET) as CSV text."""
+    return get_tweets_by_week(anchor, utc)
 
 
 @mcp.tool()
@@ -123,14 +123,14 @@ def tweets_by_weekday_grouped_pm() -> str:
 
 
 @mcp.tool()
-def tweets_by_week_grouped_pm() -> str:
-    """Return tweet counts grouped by week (starts on Friday 12:00 ET) from Polymarket data as CSV text."""
-    return get_tweets_by_week_pm()
+def tweets_by_week_grouped_pm(anchor: int = 4, utc: bool = False) -> str:
+    """Return tweet counts grouped by week (anchor weekday 0=Mon .. 6=Sun, default Friday noon ET) from Polymarket data as CSV text."""
+    return get_tweets_by_week_pm(anchor, utc)
 
 
 @mcp.tool()
 def latest_counts_pm() -> str:
-    """Return tweet counts since the most recent Tuesday and Friday noon ET from Polymarket data as CSV text."""
+    """Return Tue/Fri counts and refresh weekly UTC CSVs from Polymarket data as CSV text."""
     return get_latest_counts_pm()
 
 
@@ -206,38 +206,101 @@ def _make_stream_handler(func: Callable[[], Any]) -> Callable[[Request], Streami
     return handler
 
 
+def _parse_anchor(request: Request) -> int:
+    raw = request.query_params.get("a")
+    if raw is None:
+        return 4
+    try:
+        anchor = int(raw)
+    except ValueError:
+        raise ValueError("query parameter 'a' must be an integer between 0 and 6")
+    if anchor not in range(7):
+        raise ValueError("query parameter 'a' must be between 0 and 6")
+    return anchor
+
+
+def _parse_bool_flag(request: Request, param: str, default: bool = False) -> bool:
+    raw = request.query_params.get(param)
+    if raw is None:
+        return default
+    val = raw.lower()
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"query parameter '{param}' must be a boolean (true/false)")
+
+
+def _make_force_stream_handler(func: Callable[[bool], Any]) -> Callable[[Request], StreamingResponse]:
+    def handler(request: Request) -> StreamingResponse:
+        try:
+            force = _parse_bool_flag(request, "force")
+            result = func(force)
+            body = result if isinstance(result, (str, bytes)) else str(result)
+            return StreamingResponse(body, media_type="text/event-stream")
+        except ValueError as exc:
+            return StreamingResponse(f"invalid query: {exc}", status_code=400, media_type="text/event-stream")
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Unhandled error in handler for %s", getattr(func, "__name__", str(func)),
+            )
+            return StreamingResponse(f"error: {exc}", status_code=500, media_type="text/event-stream")
+
+    return handler
+
+
+def _week_handler_factory(func: Callable[[int, bool, bool], str]) -> Callable[[Request], StreamingResponse]:
+    def handler(request: Request) -> StreamingResponse:
+        try:
+            anchor = _parse_anchor(request)
+            utc_flag = _parse_bool_flag(request, "utc")
+            force = _parse_bool_flag(request, "force")
+            result = func(anchor, utc_flag, force)
+            body = result if isinstance(result, (str, bytes)) else str(result)
+            return StreamingResponse(body, media_type="text/event-stream")
+        except ValueError as exc:
+            return StreamingResponse(f"invalid query: {exc}", status_code=400, media_type="text/event-stream")
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Unhandled error in week handler for %s", getattr(func, "__name__", str(func)),
+            )
+            return StreamingResponse(f"error: {exc}", status_code=500, media_type="text/event-stream")
+
+    return handler
+
+
 bump = _make_stream_handler(lambda: "ok!")
-hour = _make_stream_handler(get_tweets_by_hour)
-date = _make_stream_handler(get_tweets_by_date)
-weekday = _make_stream_handler(get_tweets_by_weekday)
-week = _make_stream_handler(get_tweets_by_week)
-fifteen = _make_stream_handler(get_tweets_by_15min)
-# fifteen_with_empty = _make_stream_handler(get_tweets_by_15min_with_empty)
-# fifteen_recent = _make_stream_handler(lambda: get_tweets_by_15min_recent(6))
+hour = _make_force_stream_handler(get_tweets_by_hour)
+date = _make_force_stream_handler(get_tweets_by_date)
+weekday = _make_force_stream_handler(get_tweets_by_weekday)
+week = _week_handler_factory(get_tweets_by_week)
+fifteen = _make_force_stream_handler(get_tweets_by_15min)
+# fifteen_with_empty = _make_force_stream_handler(get_tweets_by_15min_with_empty)
+# fifteen_recent = _make_force_stream_handler(lambda force: get_tweets_by_15min_recent(6))
 
 # Other info endpoints
-total = _make_stream_handler(get_total_tweets)
-avg_day = _make_stream_handler(get_avg_per_day)
-iso_first_tweet = _make_stream_handler(get_first_tweet_date)
+total = _make_force_stream_handler(get_total_tweets)
+avg_day = _make_force_stream_handler(get_avg_per_day)
+iso_first_tweet = _make_force_stream_handler(get_first_tweet_date)
 now = _make_stream_handler(get_time_now)
-data_span = _make_stream_handler(get_data_range)
-utc_csv = _make_stream_handler(get_utc_csv)
-cc_csv = _make_stream_handler(get_cc_csv)
+data_span = _make_force_stream_handler(get_data_range)
+utc_csv = _make_force_stream_handler(get_utc_csv)
+cc_csv = _make_force_stream_handler(get_cc_csv)
 
 # Polymarket endpoint handlers
-hour_pm = _make_stream_handler(get_tweets_by_hour_pm)
-date_pm = _make_stream_handler(get_tweets_by_date_pm)
-weekday_pm = _make_stream_handler(get_tweets_by_weekday_pm)
-week_pm = _make_stream_handler(get_tweets_by_week_pm)
-latest_pm = _make_stream_handler(get_latest_counts_pm)
-fifteen_pm = _make_stream_handler(get_tweets_by_15min_pm)
-total_pm = _make_stream_handler(get_total_tweets_pm)
-avg_day_pm = _make_stream_handler(get_avg_per_day_pm)
-iso_first_tweet_pm = _make_stream_handler(get_first_tweet_date_pm)
+hour_pm = _make_force_stream_handler(get_tweets_by_hour_pm)
+date_pm = _make_force_stream_handler(get_tweets_by_date_pm)
+weekday_pm = _make_force_stream_handler(get_tweets_by_weekday_pm)
+week_pm = _week_handler_factory(get_tweets_by_week_pm)
+latest_pm = _make_force_stream_handler(get_latest_counts_pm)
+fifteen_pm = _make_force_stream_handler(get_tweets_by_15min_pm)
+total_pm = _make_force_stream_handler(get_total_tweets_pm)
+avg_day_pm = _make_force_stream_handler(get_avg_per_day_pm)
+iso_first_tweet_pm = _make_force_stream_handler(get_first_tweet_date_pm)
 now_pm = _make_stream_handler(get_time_now_pm)
-data_span_pm = _make_stream_handler(get_data_range_pm)
-utc_csv_pm = _make_stream_handler(get_utc_csv_pm)
-cc_csv_pm = _make_stream_handler(get_cc_csv_pm)
+data_span_pm = _make_force_stream_handler(get_data_range_pm)
+utc_csv_pm = _make_force_stream_handler(get_utc_csv_pm)
+cc_csv_pm = _make_force_stream_handler(get_cc_csv_pm)
 
 # Starlette route registration
 app.add_route("/", bump, methods=["GET", "POST"])  # healthcheck
@@ -260,7 +323,7 @@ app.add_route("/pm/hour", hour_pm, methods=["GET"])  # CSV
 app.add_route("/pm/date", date_pm, methods=["GET"])  # CSV
 app.add_route("/pm/weekday", weekday_pm, methods=["GET"])  # CSV
 app.add_route("/pm/week", week_pm, methods=["GET"])  # CSV
-app.add_route("/pm/latest", latest_pm, methods=["GET"])  # CSV counts since last Tue/Fri noon ET
+app.add_route("/pm/latest", latest_pm, methods=["GET"])  # CSV counts since last Tue/Fri noon ET; refreshes weekly CSVs
 app.add_route("/pm/15min", fifteen_pm, methods=["GET"])  # CSV
 app.add_route("/pm/total", total_pm, methods=["GET"])  # integer as text
 app.add_route("/pm/avg_per_day", avg_day_pm, methods=["GET"])  # float as text

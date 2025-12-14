@@ -25,7 +25,7 @@ from src.sanitize import (
     process_by_hour,
     process_by_week,
     process_by_weekday,
-    process_last_tue_fri_counts,
+    process_last_tue_fri_counts_with_weekly_refresh,
     sanitize_csv_to_file,
     save_tweets_to_csv,
 )
@@ -175,14 +175,19 @@ def fetch_and_update_database(
     return total, added
 
 
-def _download_all_pm() -> tuple[bytes, bytes, bytes]:
+def _download_all_pm(force: bool = False) -> tuple[bytes, bytes, bytes]:
     """Download and process Polymarket tweets with 5-minute caching.
+
+    Set force=True to bypass the cache freshness check and fetch new data.
 
     Returns:
         tuple of (clean_csv_bytes, utc_csv_bytes, cc_csv_bytes)
     """
     # Check cache freshness (5 minutes)
-    if all(_check_modify_date(p) for p in (RAW_PM_PATH, PRE_PM_PATH, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH)):
+    if not force and all(
+        _check_modify_date(p)
+        for p in (RAW_PM_PATH, PRE_PM_PATH, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH)
+    ):
         logger.info('Using cached Polymarket files')
         with open(CLEAN_PM_PATH, 'rb') as f:
             clean_bytes = f.read()
@@ -190,7 +195,7 @@ def _download_all_pm() -> tuple[bytes, bytes, bytes]:
             utc_bytes = f.read()
         with open(CC_PM_PATH, 'rb') as f:
             cc_bytes = f.read()
-        return (clean_bytes, utc_bytes, cc_bytes)
+        return clean_bytes, utc_bytes, cc_bytes
     else:
         logger.info('Fetching fresh Polymarket data')
 
@@ -210,60 +215,67 @@ def _download_all_pm() -> tuple[bytes, bytes, bytes]:
             pre_bytes, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH,
         )
 
-        return (clean_bytes, utc_bytes, cc_bytes)
+        return clean_bytes, utc_bytes, cc_bytes
 
 
-def _download_pm() -> bytes:
+def _download_pm(force: bool = False) -> bytes:
     """Download and process Polymarket tweets, return clean CSV bytes."""
-    clean_bytes, _, _ = _download_all_pm()
+    clean_bytes, _, _ = _download_all_pm(force)
     return clean_bytes
 
 
 # Mirror all the endpoint functions from download.py
 
-def get_tweets_by_hour_pm() -> str:
+def get_tweets_by_hour_pm(force: bool = False) -> str:
     """Return normalized tweet counts grouped by hour (ET) as CSV text."""
-    return process_by_hour(_download_pm()).decode(ENCODING)
+    return process_by_hour(_download_pm(force)).decode(ENCODING)
 
 
-def get_tweets_by_date_pm() -> str:
+def get_tweets_by_date_pm(force: bool = False) -> str:
     """Return tweet counts grouped by date (ET) as CSV text."""
-    return process_by_date(_download_pm()).decode(ENCODING)
+    return process_by_date(_download_pm(force)).decode(ENCODING)
 
 
-def get_tweets_by_weekday_pm() -> str:
+def get_tweets_by_weekday_pm(force: bool = False) -> str:
     """Return tweet counts grouped by weekday (ET) as CSV text."""
-    return process_by_weekday(_download_pm()).decode(ENCODING)
+    return process_by_weekday(_download_pm(force)).decode(ENCODING)
 
 
-def get_tweets_by_week_pm() -> str:
+def _anchor_from_param(anchor: int) -> int:
+    if anchor not in range(7):
+        raise ValueError("anchor must be in range 0..6 (0=Mon .. 6=Sun).")
+    return anchor
+
+
+def get_tweets_by_week_pm(anchor: int = 4, use_utc: bool = False, force: bool = False) -> str:
     """Return tweet counts grouped by week (starts on Friday 12:00 ET) as CSV text."""
-    return process_by_week(_download_pm()).decode(ENCODING)
+    anchor = _anchor_from_param(anchor)
+    return process_by_week(_download_pm(force), anchor_weekday=anchor, use_utc=use_utc).decode(ENCODING)
 
 
-def get_latest_counts_pm() -> str:
-    """Return total tweet counts since last Tuesday and Friday at noon ET as CSV text."""
-    return process_last_tue_fri_counts(_download_pm()).decode(ENCODING)
+def get_latest_counts_pm(force: bool = False) -> str:
+    """Return Tue/Fri counts as CSV text while refreshing weekly UTC CSVs for Polymarket data."""
+    return process_last_tue_fri_counts_with_weekly_refresh(_download_pm(force)).decode(ENCODING)
 
 
-def get_tweets_by_15min_pm() -> str:
+def get_tweets_by_15min_pm(force: bool = False) -> str:
     """Return tweet counts grouped into 15-minute buckets (ET) as CSV text."""
-    return process_by_15min(_download_pm()).decode(ENCODING)
+    return process_by_15min(_download_pm(force)).decode(ENCODING)
 
 
-def get_total_tweets_pm() -> int:
+def get_total_tweets_pm(force: bool = False) -> int:
     """Return the total number of tweets from Polymarket data."""
-    return count_tweets(_download_pm())
+    return count_tweets(_download_pm(force))
 
 
-def get_avg_per_day_pm() -> float:
+def get_avg_per_day_pm(force: bool = False) -> float:
     """Return the average tweets per day from Polymarket data."""
-    return get_average_tweets_per_day(_download_pm())
+    return get_average_tweets_per_day(_download_pm(force))
 
 
-def get_first_tweet_date_pm() -> str:
+def get_first_tweet_date_pm(force: bool = False) -> str:
     """Return the ISO timestamp of the first tweet (ET) from Polymarket data."""
-    dt = get_first_tweet_timestamp(_download_pm()).astimezone(pytz.timezone('America/New_York'))
+    dt = get_first_tweet_timestamp(_download_pm(force)).astimezone(pytz.timezone('America/New_York'))
     return dt.isoformat()
 
 
@@ -272,20 +284,20 @@ def get_time_now_pm() -> str:
     return datetime.now(pytz.timezone('America/New_York')).isoformat()
 
 
-def get_data_range_pm() -> int:
+def get_data_range_pm(force: bool = False) -> int:
     """Return the elapsed seconds between the first tweet and now (ET)."""
-    first_tweet = get_first_tweet_timestamp(_download_pm()).astimezone(pytz.timezone('America/New_York'))
+    first_tweet = get_first_tweet_timestamp(_download_pm(force)).astimezone(pytz.timezone('America/New_York'))
     now_et = datetime.now(pytz.timezone('America/New_York'))
     return int((now_et - first_tweet).total_seconds())
 
 
-def get_utc_csv_pm() -> str:
+def get_utc_csv_pm(force: bool = False) -> str:
     """Return the utc_elonmusk_pm.csv file as bytes."""
-    _, utc_bytes, _ = _download_all_pm()
+    _, utc_bytes, _ = _download_all_pm(force)
     return utc_bytes.decode(ENCODING)
 
 
-def get_cc_csv_pm() -> str:
+def get_cc_csv_pm(force: bool = False) -> str:
     """Return the cc_elonmusk_pm.csv file as bytes (recent 6 months)."""
-    _, _, cc_bytes = _download_all_pm()
+    _, _, cc_bytes = _download_all_pm(force)
     return cc_bytes.decode(ENCODING)

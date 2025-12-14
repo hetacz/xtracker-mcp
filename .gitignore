@@ -4,5 +4,7 @@
 *.csv
 uv.lock
 
-tests
-docs
+/tests
+/tests_db
+
+__pycache__/
