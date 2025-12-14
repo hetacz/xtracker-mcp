@@ -47,6 +47,28 @@ Accept: {{contentType}}
 
 ###
 
+GET {{baseUrl}}/week?a=1
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/week' with anchor executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
+
+###
+
+GET {{baseUrl}}/week?utc=true
+Accept: {{contentType}}
+
+> {%
+    client.test("Request '/week' with utc flag executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
+
+###
+
 GET {{baseUrl}}/total
 Accept: {{contentType}}
 
