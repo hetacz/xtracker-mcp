@@ -44,10 +44,14 @@ os.makedirs(DOWNLOAD_DIR_PM_RAW, exist_ok=True)
 
 # Output paths
 RAW_PM_PATH = os.path.join(DOWNLOAD_DIR_PM, 'raw_elonmusk_pm.csv')
-PRE_PM_PATH = os.path.join(DOWNLOAD_DIR_PM, 'pre_elonmusk_pm.csv')
-CLEAN_PM_PATH = os.path.join(DOWNLOAD_DIR_PM, 'clean_elonmusk_pm.csv')
-CC_PM_PATH = os.path.join(DOWNLOAD_DIR_PM, 'cc_elonmusk_pm.csv')
-UTC_PM_PATH = os.path.join(DOWNLOAD_DIR_PM, 'utc_elonmusk_pm.csv')
+PRE_PM_PREFIX = os.path.join(DOWNLOAD_DIR_PM, 'pre_elonmusk_pm')
+PRE_PM_PATH = f"{PRE_PM_PREFIX}.csv"
+CLEAN_PM_PREFIX = os.path.join(DOWNLOAD_DIR_PM, 'clean_elonmusk_pm')
+CLEAN_PM_PATH = f"{CLEAN_PM_PREFIX}.csv"
+CC_PM_PREFIX = os.path.join(DOWNLOAD_DIR_PM, 'cc_elonmusk_pm')
+CC_PM_PATH = f"{CC_PM_PREFIX}.csv"
+UTC_PM_PREFIX = os.path.join(DOWNLOAD_DIR_PM, 'utc_elonmusk_pm')
+UTC_PM_PATH = f"{UTC_PM_PREFIX}.csv"
 
 ENCODING = 'utf-8'
 
@@ -208,11 +212,14 @@ def _download_all_pm(force: bool = False) -> tuple[bytes, bytes, bytes]:
         save_tweets_to_csv(raw_csv_bytes, RAW_PM_PATH)
 
         # Sanitize
-        pre_bytes = sanitize_csv_to_file(raw_csv_bytes, PRE_PM_PATH)
+        pre_bytes = sanitize_csv_to_file(raw_csv_bytes, PRE_PM_PREFIX)
 
         # Create clean timestamps
         clean_bytes, utc_bytes, cc_bytes = create_clean_timestamps_csv(
-            pre_bytes, CLEAN_PM_PATH, UTC_PM_PATH, CC_PM_PATH,
+            pre_bytes,
+            CLEAN_PM_PREFIX,
+            UTC_PM_PREFIX,
+            CC_PM_PREFIX,
         )
 
         return clean_bytes, utc_bytes, cc_bytes

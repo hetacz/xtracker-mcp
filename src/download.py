@@ -15,10 +15,14 @@ from src.sanitize import (
 logger = logging.getLogger(__name__)
 
 RAW_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'raw_elonmusk.csv')
-PRE_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'pre_elonmusk.csv')
-CLEAN_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'clean_elonmusk.csv')
-CC_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'cc_elonmusk.csv')
-UTC_PATH = os.path.join(DOWNLOAD_DIR_MAIN, 'utc_elonmusk.csv')
+PRE_PREFIX = os.path.join(DOWNLOAD_DIR_MAIN, 'pre_elonmusk')
+PRE_PATH = f"{PRE_PREFIX}.csv"
+CLEAN_PREFIX = os.path.join(DOWNLOAD_DIR_MAIN, 'clean_elonmusk')
+CLEAN_PATH = f"{CLEAN_PREFIX}.csv"
+CC_PREFIX = os.path.join(DOWNLOAD_DIR_MAIN, 'cc_elonmusk')
+CC_PATH = f"{CC_PREFIX}.csv"
+UTC_PREFIX = os.path.join(DOWNLOAD_DIR_MAIN, 'utc_elonmusk')
+UTC_PATH = f"{UTC_PREFIX}.csv"
 
 ENCODING = 'utf-8'
 
@@ -60,8 +64,13 @@ def _download_all(force: bool = False) -> tuple[bytes, bytes, bytes]:
         resp.raise_for_status()
         logger.info('Download status code: %s', resp.status_code)
         save_tweets_to_csv(resp.content, RAW_PATH)
-        pre_bytes = sanitize_csv_to_file(resp.content, PRE_PATH)
-        clean_bytes, utc_bytes, cc_bytes = create_clean_timestamps_csv(pre_bytes, CLEAN_PATH, UTC_PATH, CC_PATH)
+        pre_bytes = sanitize_csv_to_file(resp.content, PRE_PREFIX)
+        clean_bytes, utc_bytes, cc_bytes = create_clean_timestamps_csv(
+            pre_bytes,
+            CLEAN_PREFIX,
+            UTC_PREFIX,
+            CC_PREFIX,
+        )
         return clean_bytes, utc_bytes, cc_bytes
 
 
