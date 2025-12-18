@@ -14,6 +14,7 @@ ET_TZ = pytz.timezone('America/New_York')
 WEEKDAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOWNLOAD_DIR = os.path.join(ROOT_DIR, "downloads")
+DOWNLOAD_OUTPUT_DIR = os.path.join(DOWNLOAD_DIR, "output")
 DOWNLOAD_DIR_MAIN = os.path.join(DOWNLOAD_DIR, "main")
 DOWNLOAD_DIR_15 = os.path.join(DOWNLOAD_DIR, "15m")
 DOWNLOAD_DIR_15_ET = os.path.join(DOWNLOAD_DIR_15, "et")
@@ -21,6 +22,7 @@ DOWNLOAD_DIR_15_UTC = os.path.join(DOWNLOAD_DIR_15, "utc")
 ENCODING = "utf-8"
 CSV_EXTENSION = ".csv"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(DOWNLOAD_OUTPUT_DIR, exist_ok=True)
 os.makedirs(DOWNLOAD_DIR_MAIN, exist_ok=True)
 os.makedirs(DOWNLOAD_DIR_15, exist_ok=True)
 os.makedirs(DOWNLOAD_DIR_15_ET, exist_ok=True)
@@ -333,7 +335,7 @@ def process_by_date(
     output_prefix: str = "by_date",
 ) -> bytes:
     """Aggregate tweets per calendar day (ET), filling gaps with zero counts."""
-    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_DIR)
+    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_OUTPUT_DIR)
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
         today = pd.Timestamp.now(tz=ET_TZ).floor('D')
@@ -364,7 +366,7 @@ def process_by_hour(
     output_prefix: str = "by_hour",
 ) -> bytes:
     """Aggregate tweets per clock hour (ET) with normalized frequency and a daily average."""
-    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_DIR)
+    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_OUTPUT_DIR)
     ts = _timestamps_et_from_bytes(file_bytes)
     hours = pd.Index(range(24), name='hour')
     counts = (
@@ -398,7 +400,7 @@ def process_by_weekday(
     output_prefix: str = "by_weekday",
 ) -> bytes:
     """Aggregate tweets by weekday with average-per-occurrence and normalized proportions."""
-    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_DIR)
+    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_OUTPUT_DIR)
     ts = _timestamps_et_from_bytes(file_bytes)
     days_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -444,14 +446,14 @@ def process_by_week(
     """Aggregate tweets per anchored week (default: Friday noon) with optional gap filling.
 
     The initial partial week (when data starts after the anchor boundary) is dropped
-    so we only report full weekly buckets. Files are written beneath downloads/ using
-    the provided prefix with `_fri`, `_mon`, etc., and `_utc` when requested.
+    so we only report full weekly buckets. Files are written beneath downloads/output/
+    using the provided prefix with `_fri`, `_mon`, etc., and `_utc` when requested.
     """
     anchor_label = _anchor_label(anchor_weekday)
     suffix = f"_{anchor_label}"
     if use_utc:
         suffix += "_utc"
-    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_DIR, suffix=suffix)
+    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_OUTPUT_DIR, suffix=suffix)
     col_name = "week_start_utc" if use_utc else "week_start_et"
     ts = _timestamps_et_from_bytes(file_bytes)
     if ts.empty:
@@ -528,7 +530,7 @@ def process_last_week_counts(
     if output_prefix is not None:
         path = _resolve_csv_path(
             output_prefix,
-            default_dir=DOWNLOAD_DIR,
+            default_dir=DOWNLOAD_OUTPUT_DIR,
             suffix=f"_{anchor_weekday}",
         )
     out_df = pd.DataFrame([row])
@@ -558,7 +560,7 @@ def process_last_tue_fri_counts_with_weekly_refresh(
     _refresh_weekly_csvs_utc(file_bytes)
 
     out_df = pd.concat(parts, ignore_index=True).sort_values("window_start_et", kind="stable")
-    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_DIR)
+    path = _resolve_csv_path(output_prefix, default_dir=DOWNLOAD_OUTPUT_DIR)
     return _write_dataframe(out_df, path)
 
 

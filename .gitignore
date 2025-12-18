@@ -6,5 +6,6 @@ uv.lock
 
 /tests
 /tests_db
+/docs
 
 __pycache__/

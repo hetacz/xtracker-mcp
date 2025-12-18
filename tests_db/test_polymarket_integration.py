@@ -126,14 +126,11 @@ def main_test():
     print("POLYMARKET INTEGRATION TEST SUITE")
     print("=" * 60)
 
-    results = []
-
-    results.append(("Imports", test_imports()))
-    results.append(("Database Load", test_database_load()))
-    results.append(("Database Functions", test_database_functions()))
-    results.append(("CSV Conversion", test_csv_conversion()))
-    results.append(("API Functions", test_api_functions_exist()))
-    results.append(("Main Integration", test_main_integration()))
+    results = [
+        ("Imports", test_imports()), ("Database Load", test_database_load()),
+        ("Database Functions", test_database_functions()), ("CSV Conversion", test_csv_conversion()),
+        ("API Functions", test_api_functions_exist()), ("Main Integration", test_main_integration())
+    ]
 
     print("\n" + "=" * 60)
     print("TEST RESULTS")
