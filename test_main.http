@@ -1,6 +1,6 @@
 # Test your FastAPI endpoints
 
-@baseUrl = http://127.0.0.1:8001
+@baseUrl = http://127.0.0.1:8001/pm
 @contentType = application/json
 
 GET {{baseUrl}}/hour
