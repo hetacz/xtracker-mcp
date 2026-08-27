@@ -1,154 +1,119 @@
-"""Quick test script to verify Polymarket integration works."""
+"""Pytest and standalone checks for the local Polymarket database integration."""
+
+from __future__ import annotations
+
 import sys
 import traceback
+from datetime import datetime
+from pathlib import Path
+from typing import Callable
+
+# Preserve direct ``python tests_db/test_polymarket_integration.py`` usage.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def test_imports():
-    """Test that all modules can be imported."""
-    print("Testing imports...")
-    try:
-        from src import db
-        from src import download_polymarket
-        print("✓ All modules imported successfully")
-        return True
-    except Exception as e:
-        print(f"✗ Import failed: {e}")
-        traceback.print_exc()
-        return False
+def test_imports() -> None:
+    """All integration modules import successfully."""
+    from src import db, download_polymarket
+
+    assert callable(db.load_database)
+    assert callable(download_polymarket.fetch_tweets_from_api)
 
 
-def test_database_load():
-    """Test loading the database."""
-    print("\nTesting database load...")
-    try:
-        from src.db import load_database, get_database_stats
+def test_database_load() -> None:
+    """The checked-in database loads with internally consistent statistics."""
+    from src.db import get_database_stats, load_database
 
-        df = load_database()
-        print(f"✓ Database loaded: {len(df)} tweets")
+    database = load_database()
+    stats = get_database_stats()
 
-        stats = get_database_stats()
-        print(f"  Total tweets: {stats['total_tweets']:,}")
-        print(f"  Oldest:       {stats['oldest_date']}")
-        print(f"  Newest:       {stats['newest_date']}")
-        return True
-    except Exception as e:
-        print(f"✗ Database load failed: {e}")
-        traceback.print_exc()
-        return False
+    assert not database.empty
+    assert {"id", "text"}.issubset(database.columns)
+    assert stats["total_tweets"] == len(database)
+    assert stats["oldest_date"] is not None
+    assert stats["newest_date"] is not None
 
 
-def test_database_functions():
-    """Test database utility functions."""
-    print("\nTesting database functions...")
-    try:
-        from src.db import get_most_recent_tweet_id, get_most_recent_timestamp
+def test_database_functions() -> None:
+    """The most-recent ID and timestamp are valid and mutually consistent."""
+    from src.db import get_most_recent_timestamp, get_most_recent_tweet_id
 
-        recent_id = get_most_recent_tweet_id()
-        print(f"✓ Most recent tweet ID: {recent_id}")
+    recent_id = get_most_recent_tweet_id()
+    recent_timestamp = get_most_recent_timestamp()
 
-        recent_ts = get_most_recent_timestamp()
-        print(f"✓ Most recent timestamp: {recent_ts}")
-
-        return True
-    except Exception as e:
-        print(f"✗ Database functions failed: {e}")
-        traceback.print_exc()
-        return False
+    assert recent_id is not None and recent_id.isdigit()
+    assert isinstance(recent_timestamp, datetime)
+    assert recent_timestamp.tzinfo is not None
 
 
-def test_csv_conversion():
-    """Test converting database to CSV with timestamps."""
-    print("\nTesting CSV conversion...")
-    try:
-        from src.db import database_to_csv_with_timestamps
+def test_csv_conversion() -> None:
+    """Database export produces the documented three-column CSV."""
+    from src.db import database_to_csv_with_timestamps
 
-        csv_bytes = database_to_csv_with_timestamps()
-        lines = csv_bytes.decode('utf-8').split('\n')
+    csv_bytes = database_to_csv_with_timestamps()
+    lines = csv_bytes.decode("utf-8").splitlines()
 
-        print(f"✓ CSV conversion successful: {len(lines) - 1} rows")
-        print(f"  Header: {lines[0]}")
-        if len(lines) > 1 and lines[1]:
-            print(f"  First row: {lines[1][:80]}...")
-
-        return True
-    except Exception as e:
-        print(f"✗ CSV conversion failed: {e}")
-        traceback.print_exc()
-        return False
+    assert lines[0] == "id,text,created_at"
+    assert len(lines) > 1
 
 
-def test_api_functions_exist():
-    """Test that API functions are defined."""
-    print("\nTesting API function definitions...")
-    try:
-        from src.download_polymarket import (
-            get_tweets_by_hour_pm,
-            get_tweets_by_date_pm,
-            get_tweets_by_weekday_pm,
-            get_tweets_by_week_pm,
-            get_tweets_by_15min_pm,
-            get_total_tweets_pm,
-            get_avg_per_day_pm,
-        )
+def test_api_functions_exist() -> None:
+    """All public Polymarket aggregation functions remain callable."""
+    from src.download_polymarket import (
+        get_avg_per_day_pm,
+        get_total_tweets_pm,
+        get_tweets_by_15min_pm,
+        get_tweets_by_date_pm,
+        get_tweets_by_hour_pm,
+        get_tweets_by_week_pm,
+        get_tweets_by_weekday_pm,
+    )
 
-        print("✓ All API functions defined")
-        return True
-    except Exception as e:
-        print(f"✗ API function check failed: {e}")
-        traceback.print_exc()
-        return False
-
-
-def test_main_integration():
-    """Test that main.py integrates correctly."""
-    print("\nTesting main.py integration...")
-    try:
-        import main
-
-        # Check that app exists
-        if hasattr(main, 'app'):
-            print("✓ FastAPI app created")
-
-        # Check that MCP server exists
-        if hasattr(main, 'mcp'):
-            print("✓ MCP server created")
-
-        return True
-    except Exception as e:
-        print(f"✗ Main integration failed: {e}")
-        traceback.print_exc()
-        return False
+    functions = (
+        get_tweets_by_hour_pm,
+        get_tweets_by_date_pm,
+        get_tweets_by_weekday_pm,
+        get_tweets_by_week_pm,
+        get_tweets_by_15min_pm,
+        get_total_tweets_pm,
+        get_avg_per_day_pm,
+    )
+    assert all(callable(function) for function in functions)
 
 
-def main_test():
-    """Run all tests."""
-    print("=" * 60)
-    print("POLYMARKET INTEGRATION TEST SUITE")
-    print("=" * 60)
+def test_main_integration() -> None:
+    """The HTTP app and MCP server are both wired by the entry point."""
+    import main
 
-    results = [
-        ("Imports", test_imports()), ("Database Load", test_database_load()),
-        ("Database Functions", test_database_functions()), ("CSV Conversion", test_csv_conversion()),
-        ("API Functions", test_api_functions_exist()), ("Main Integration", test_main_integration())
-    ]
-
-    print("\n" + "=" * 60)
-    print("TEST RESULTS")
-    print("=" * 60)
-
-    for name, passed in results:
-        status = "✓ PASS" if passed else "✗ FAIL"
-        print(f"{name:.<40} {status}")
-
-    total = len(results)
-    passed = sum(1 for _, p in results if p)
-
-    print("=" * 60)
-    print(f"TOTAL: {passed}/{total} tests passed")
-    print("=" * 60)
-
-    return 0 if passed == total else 1
+    assert hasattr(main, "app")
+    assert hasattr(main, "mcp")
 
 
-if __name__ == '__main__':
+def main_test() -> int:
+    """Run the same checks without requiring pytest's test runner."""
+    checks: tuple[tuple[str, Callable[[], None]], ...] = (
+        ("Imports", test_imports),
+        ("Database Load", test_database_load),
+        ("Database Functions", test_database_functions),
+        ("CSV Conversion", test_csv_conversion),
+        ("API Functions", test_api_functions_exist),
+        ("Main Integration", test_main_integration),
+    )
+    failures = 0
+
+    for name, check in checks:
+        try:
+            check()
+            print(f"{name:.<40} PASS")
+        except Exception:
+            failures += 1
+            print(f"{name:.<40} FAIL")
+            traceback.print_exc()
+
+    print(f"TOTAL: {len(checks) - failures}/{len(checks)} tests passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
     sys.exit(main_test())
