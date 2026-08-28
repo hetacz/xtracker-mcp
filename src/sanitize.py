@@ -203,6 +203,13 @@ def _write_time_buckets(df: DataFrame, path: str, column: str) -> bytes:
     return _write_dataframe(view, path)
 
 
+def _write_time_buckets_utc_z(df: DataFrame, path: str, column: str) -> bytes:
+    """Write UTC buckets with timestamps formatted using a trailing ``Z``."""
+    view = df[[column, 'total_count']].copy()
+    view[column] = view[column].map(lambda d: d.strftime('%Y-%m-%dT%H:%M:%SZ'))
+    return _write_dataframe(view, path)
+
+
 # compare length with ids found in raw?
 def sanitize_csv_to_file(
     input_data: Union[bytes, str],
@@ -564,6 +571,57 @@ def process_last_tue_fri_counts_with_weekly_refresh(
     return _write_dataframe(out_df, path)
 
 
+def process_by_15min_pair(
+    file_bytes: bytes,
+    output_prefix: str,
+    output_prefix_utc: str,
+    include_empty: bool = False,
+) -> tuple[bytes, bytes]:
+    """Write one ET and one UTC 15-minute aggregate for timestamp CSV bytes."""
+    path_et = _resolve_csv_path(output_prefix)
+    path_utc = _resolve_csv_path(output_prefix_utc)
+    ts = _timestamps_et_from_bytes(file_bytes)
+
+    if ts.empty:
+        empty_et = pd.DataFrame(columns=['15m_bucket_start_et', 'total_count'])
+        empty_utc = pd.DataFrame(columns=['15m_bucket_start_utc', 'total_count'])
+        return (
+            _write_dataframe(empty_et, path_et),
+            _write_time_buckets_utc_z(empty_utc, path_utc, '15m_bucket_start_utc'),
+        )
+
+    bucket_start = _floor_to_minutes(ts, 15)
+    grouped = (
+        bucket_start.to_frame(name='15m_bucket_start_et')
+        .groupby('15m_bucket_start_et', sort=True)
+        .size()
+        .reset_index(name='total_count')
+    )
+
+    if include_empty:
+        start_aligned = bucket_start.min()
+        now_aligned = _align_now_to_minutes(pd.Timestamp.now(tz=ET_TZ), 15)
+        full_idx = pd.date_range(start=start_aligned, end=now_aligned, freq='15min')
+        grouped = (
+            grouped.set_index('15m_bucket_start_et')
+            .reindex(full_idx, fill_value=0)
+            .rename_axis('15m_bucket_start_et')
+            .reset_index()
+        )
+
+    grouped = grouped.sort_values('15m_bucket_start_et', kind='stable')
+    et_bytes = _write_time_buckets(grouped, path_et, '15m_bucket_start_et')
+
+    grouped_utc = grouped.copy()
+    grouped_utc['15m_bucket_start_utc'] = grouped_utc['15m_bucket_start_et'].dt.tz_convert('UTC')
+    utc_bytes = _write_time_buckets_utc_z(
+        grouped_utc,
+        path_utc,
+        '15m_bucket_start_utc',
+    )
+    return et_bytes, utc_bytes
+
+
 def process_by_15min(
     file_bytes: bytes,
     output_prefix: str = "by_15min",
@@ -595,13 +653,6 @@ def process_by_15min(
     path_last_fri_utc = _resolve_csv_path(output_prefix_last_fri_utc, default_dir=DOWNLOAD_DIR_15_UTC)
 
     ts = _timestamps_et_from_bytes(file_bytes)
-
-    def _write_time_buckets_utc_z(df: DataFrame, path: str, column: str) -> bytes:
-        """Write UTC 15-minute buckets with timestamps formatted using 'Z'."""
-        view = df[[column, 'total_count']].copy()
-        # Expect timezone-aware UTC timestamps; format explicitly with Z
-        view[column] = view[column].map(lambda d: d.strftime('%Y-%m-%dT%H:%M:%SZ'))
-        return _write_dataframe(view, path)
 
     if ts.empty:
         # Prepare empty ET DataFrame and reuse for ET outputs

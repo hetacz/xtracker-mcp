@@ -3,7 +3,7 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from src.download import (
     get_avg_per_day, get_cc_csv, get_data_range, get_first_tweet_date, get_time_now, get_total_tweets,
@@ -14,6 +14,7 @@ from src.download_polymarket import (
     get_total_tweets_pm, get_tweets_by_15min_pm, get_tweets_by_date_pm, get_tweets_by_hour_pm, get_tweets_by_week_pm,
     get_tweets_by_weekday_pm, get_utc_csv_pm,
 )
+from src.download_tg import DEFAULT_POST_COUNT, fetch_tg_posts_by_15min
 
 mcp = FastMCP(
     name="xtracker-mcp",
@@ -182,6 +183,16 @@ def cc_csv_bytes_pm() -> str:
     return get_cc_csv_pm()
 
 
+# ---------- Telegram fallback MCP tools ----------
+@mcp.tool()
+def fetch_latest_non_reply_posts_tg(
+    n: int = DEFAULT_POST_COUNT,
+    utc: bool = False,
+) -> str:
+    """Fetch n total @elonalert posts, filter replies, and return 15-minute CSV."""
+    return fetch_tg_posts_by_15min(n, utc)
+
+
 # ---------- HTTP app and routes ----------
 app = mcp.streamable_http_app()  # MCP routes live at /mcp/
 
@@ -231,6 +242,19 @@ def _parse_bool_flag(request: Request, param: str, default: bool = False) -> boo
     raise ValueError(f"query parameter '{param}' must be a boolean (true/false)")
 
 
+def _parse_post_count(request: Request) -> int:
+    raw = request.query_params.get("n")
+    if raw is None:
+        return DEFAULT_POST_COUNT
+    try:
+        count = int(raw)
+    except ValueError:
+        raise ValueError("query parameter 'n' must be an integer")
+    if count < 1:
+        raise ValueError("query parameter 'n' must be at least 1")
+    return count
+
+
 def _make_force_stream_handler(func: Callable[[bool], Any]) -> Callable[[Request], StreamingResponse]:
     def handler(request: Request) -> StreamingResponse:
         try:
@@ -267,6 +291,29 @@ def _week_handler_factory(func: Callable[[int, bool, bool], str]) -> Callable[[R
             return StreamingResponse(f"error: {exc}", status_code=500, media_type="text/event-stream")
 
     return handler
+
+
+def _tg_fetch_handler(request: Request) -> Response:
+    try:
+        count = _parse_post_count(request)
+        utc_flag = _parse_bool_flag(request, "utc")
+        return Response(
+            fetch_tg_posts_by_15min(count, utc_flag),
+            media_type="text/csv",
+        )
+    except ValueError as exc:
+        return Response(
+            f"invalid query: {exc}",
+            status_code=400,
+            media_type="text/plain",
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Unhandled error in TG fetch handler")
+        return Response(
+            f"error: {exc}",
+            status_code=500,
+            media_type="text/plain",
+        )
 
 
 bump = _make_stream_handler(lambda: "ok!")
@@ -332,3 +379,6 @@ app.add_route("/pm/time_now", now_pm, methods=["GET"])  # ISO string
 app.add_route("/pm/data_span", data_span_pm, methods=["GET"])  # int seconds as text
 app.add_route("/pm/utc_csv", utc_csv_pm, methods=["GET"])  # CSV bytes (UTC timestamps)
 app.add_route("/pm/cc_csv", cc_csv_pm, methods=["GET"])  # CSV bytes (recent 6 months ET)
+
+# Telegram fallback route
+app.add_route("/tg/fetch", _tg_fetch_handler, methods=["GET"])

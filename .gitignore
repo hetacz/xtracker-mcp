@@ -3,9 +3,8 @@
 **/xt.egg-info
 *.csv
 uv.lock
-
-/tests
-/tests_db
-/docs
-
+z
 __pycache__/
+
+/downloads/polymarket_raw/**.json
+/downloads/polymarket_tests/
