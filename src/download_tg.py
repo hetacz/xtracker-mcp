@@ -26,6 +26,7 @@ TG_CHANNEL = "elonalert"
 TG_PUBLIC_URL = f"https://t.me/s/{TG_CHANNEL}"
 TG_USER_AGENT = "xtracker-mcp-telegram-fallback/1.0"
 DEFAULT_POST_COUNT = 1_000
+MAX_POST_COUNT = 2_000
 ENCODING = "utf-8"
 TWITTER_EPOCH_MS = 1_288_834_974_657
 NON_REPLY_LABELS = frozenset({"Tweet", "Quote", "ReTweet"})
@@ -109,6 +110,8 @@ def _validate_post_count(n: int) -> int:
         raise ValueError("n must be an integer")
     if n < 1:
         raise ValueError("n must be at least 1")
+    if n > MAX_POST_COUNT:
+        raise ValueError(f"n must be at most {MAX_POST_COUNT}")
     return n
 
 

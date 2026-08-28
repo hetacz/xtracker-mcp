@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 import pandas as pd
+import pytest
 from starlette.requests import Request
 
 import main
@@ -36,6 +37,18 @@ class _FakeSession:
     def get(self, url: str, **kwargs: object) -> _FakeResponse:
         self.calls.append({"url": url, **kwargs})
         return _FakeResponse(self.pages[len(self.calls) - 1])
+
+
+def test_fetch_rejects_post_count_above_limit_before_request() -> None:
+    session = _FakeSession([])
+
+    with pytest.raises(ValueError, match="n must be at most 2000"):
+        download_tg.fetch_latest_non_reply_posts(
+            download_tg.MAX_POST_COUNT + 1,
+            session=session,  # type: ignore[arg-type]
+        )
+
+    assert session.calls == []
 
 
 def test_post_filter_keeps_explicit_self_reply() -> None:
@@ -231,3 +244,20 @@ def test_tg_http_route_applies_defaults_and_selects_utc(monkeypatch) -> None:
     assert utc_body.startswith("15m_bucket_start_utc")
     assert invalid_status == 400
     assert calls == [(1_000, False), (25, True)]
+
+
+def test_tg_http_route_rejects_post_count_above_limit() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/tg/fetch",
+            "query_string": b"n=2001",
+            "headers": [],
+        },
+    )
+
+    response = main._tg_fetch_handler(request)
+
+    assert response.status_code == 400
+    assert response.body.decode() == "invalid query: n must be at most 2000"
